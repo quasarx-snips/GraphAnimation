@@ -1,0 +1,16 @@
+[project]
+name = "repl-nix-workspace"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.11"
+dependencies = [
+    "bar-chart-race>=0.1.0",
+    "matplotlib>=3.10.9",
+    "moviepy>=2.2.1",
+    "numpy>=2.4.4",
+    "openai>=2.33.0",
+    "pandas>=3.0.2",
+    "pillow>=11.3.0",
+    "requests>=2.33.1",
+    "streamlit>=1.57.0",
+]
