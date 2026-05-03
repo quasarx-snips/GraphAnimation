@@ -110,7 +110,7 @@ Year,Male,Female
     cleaned = "\n".join(l for l in raw.splitlines() if not l.strip().startswith("```"))
     df = pd.read_csv(io.StringIO(cleaned))
     df = df.set_index(df.columns[0])
-    df = df.apply(pd.to_numeric, errors="coerce").fillna(method=None)  # no fill — catch bad data
+    df = df.apply(pd.to_numeric, errors="coerce")
     df = df.ffill().bfill().fillna(0)
 
     title_resp = client.chat.completions.create(
