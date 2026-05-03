@@ -1,3 +1,4 @@
+import shutil
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -8,6 +9,10 @@ import time
 import requests
 import matplotlib
 matplotlib.use("Agg")
+# Point matplotlib's animation writer at the Nix-store ffmpeg before any other import
+_ffmpeg_path = shutil.which("ffmpeg")
+if _ffmpeg_path:
+    matplotlib.rcParams["animation.ffmpeg_path"] = _ffmpeg_path
 import matplotlib.pyplot as plt
 from PIL import Image, ImageDraw, ImageFont
 from openai import OpenAI
@@ -125,7 +130,7 @@ def create_race_video(df: pd.DataFrame, raw_path: str) -> str:
         shared_fontdict={"family": "DejaVu Sans", "color": "white"},
         scale="linear",
         writer="ffmpeg",
-        bar_kwargs={"alpha": 0.88, "edgecolor": "none"},
+        bar_kwargs={"alpha": 0.88},
         filter_column_colors=False,
     )
     plt.close("all")
