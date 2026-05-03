@@ -9,7 +9,6 @@ import requests
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.patheffects as pe
 from PIL import Image, ImageDraw, ImageFont
 from openai import OpenAI
 import bar_chart_race as bcr
@@ -20,14 +19,17 @@ client = OpenAI(
     api_key=os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY"),
 )
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
-
+# ── Constants ──────────────────────────────────────────────────────────────────
 MUSIC_URLS = [
     "https://cdn.pixabay.com/download/audio/2021/09/23/audio_57bc8dcb4e.mp3",
     "https://cdn.pixabay.com/download/audio/2022/10/25/audio_d0bba6d4e2.mp3",
     "https://cdn.pixabay.com/download/audio/2022/03/15/audio_c8f4f4a5db.mp3",
 ]
 
+FONT_PATH = "/run/current-system/sw/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+
+
+# ── Data extraction ─────────────────────────────────────────────────────────────
 
 def extract_data_from_llm(topic: str) -> tuple[pd.DataFrame, str]:
     """Call LLM to produce a wide-format CSV suitable for bar chart race."""
@@ -37,8 +39,8 @@ Generate a structured dataset for a bar chart race animation about:
 "{topic}"
 
 Requirements:
-- First column: time index (e.g. Year as integer, e.g. 1990, 1995, 2000 …)
-- 5-10 category columns with short names (≤20 chars each)
+- First column: time index (e.g. Year as integer: 2000, 2001, 2002 …)
+- 2-8 category columns with short names (≤20 chars each)
 - Numeric values only — no commas inside numbers, no units, no currency symbols
 - At least 15 time periods for smooth animation
 - Values must change meaningfully over time
@@ -61,42 +63,34 @@ Year,USA,China,Japan,Germany,UK
     )
 
     raw = response.choices[0].message.content.strip()
-
     # Strip accidental markdown fences
-    lines = raw.splitlines()
-    cleaned = "\n".join(l for l in lines if not l.strip().startswith("```"))
+    cleaned = "\n".join(l for l in raw.splitlines() if not l.strip().startswith("```"))
 
     df = pd.read_csv(io.StringIO(cleaned))
-    index_col = df.columns[0]
-    df = df.set_index(index_col)
+    df = df.set_index(df.columns[0])
     df = df.apply(pd.to_numeric, errors="coerce").fillna(0)
 
-    # Derive a clean chart title from the topic
+    # Derive a clean chart title
     title_resp = client.chat.completions.create(
         model="gpt-5.1",
         messages=[
-            {"role": "user", "content": f"Write a short chart title (max 8 words, title case) for: {topic}. Return only the title."},
+            {"role": "user", "content": (
+                f"Write a short chart title (max 8 words, title case) for: {topic}. "
+                "Return only the title, no quotes."
+            )},
         ],
         max_completion_tokens=40,
     )
-    chart_title = title_resp.choices[0].message.content.strip().strip('"').strip("'")
+    chart_title = title_resp.choices[0].message.content.strip().strip('"\'')
     return df, chart_title
 
 
-def dark_fig(figsize):
-    fig, ax = plt.subplots(figsize=figsize, facecolor="#000000")
-    ax.set_facecolor("#000000")
-    return fig, ax
-
+# ── Animation ──────────────────────────────────────────────────────────────────
 
 def create_race_video(df: pd.DataFrame, raw_path: str) -> str:
-    """Render the bar chart race to an MP4 file (9:16, 1080×1920)."""
+    """Render bar chart race to MP4 — 9:16 (1080×1920)."""
     # 1080 / 160 = 6.75  |  1920 / 160 = 12.0
     figsize = (6.75, 12.0)
-    dpi = 160
-
-    fig, ax = dark_fig(figsize)
-    plt.close(fig)
 
     bcr.bar_chart_race(
         df=df,
@@ -122,7 +116,7 @@ def create_race_video(df: pd.DataFrame, raw_path: str) -> str:
         },
         period_length=600,
         figsize=figsize,
-        dpi=dpi,
+        dpi=160,
         cmap="dark12",
         title="",
         title_size=0,
@@ -134,41 +128,40 @@ def create_race_video(df: pd.DataFrame, raw_path: str) -> str:
         bar_kwargs={"alpha": 0.88, "edgecolor": "none"},
         filter_column_colors=False,
     )
+    plt.close("all")
     return raw_path
 
+
+# ── Title frame ────────────────────────────────────────────────────────────────
 
 def make_title_frame(title: str, width: int, height: int) -> np.ndarray:
     """Render a semi-transparent title banner as an RGBA numpy array."""
     img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    # Banner background
     banner_h = max(90, int(height * 0.07))
-    draw.rectangle([(0, 0), (width, banner_h)], fill=(0, 0, 0, 200))
+    draw.rectangle([(0, 0), (width, banner_h)], fill=(0, 0, 0, 210))
 
-    # Try to load a bold font; fall back to default
     font_size = max(32, int(banner_h * 0.45))
     try:
-        font = ImageFont.truetype("/run/current-system/sw/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
+        font = ImageFont.truetype(FONT_PATH, font_size)
     except Exception:
         font = ImageFont.load_default()
 
-    # Wrap text if too long
-    max_chars = max(20, width // (font_size // 2))
+    max_chars = max(20, width // max(1, font_size // 2))
     if len(title) > max_chars:
         title = title[: max_chars - 3] + "…"
 
     bbox = draw.textbbox((0, 0), title, font=font)
-    tw = bbox[2] - bbox[0]
-    th = bbox[3] - bbox[1]
-    tx = (width - tw) // 2
-    ty = (banner_h - th) // 2
-    draw.text((tx, ty), title, fill=(255, 255, 255, 240), font=font)
+    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    draw.text(((width - tw) // 2, (banner_h - th) // 2), title, fill=(255, 255, 255, 240), font=font)
 
     return np.array(img)
 
 
-def download_music(tmp_dir: str):
+# ── Music ──────────────────────────────────────────────────────────────────────
+
+def download_music(tmp_dir: str) -> str | None:
     for url in MUSIC_URLS:
         try:
             r = requests.get(url, timeout=20)
@@ -182,9 +175,12 @@ def download_music(tmp_dir: str):
     return None
 
 
+# ── Post-production (MoviePy 2.x API) ─────────────────────────────────────────
+
 def post_produce(raw_path: str, title: str, final_path: str, tmp_dir: str) -> str:
     """Add title overlay + background music; export final 1080×1920 MP4."""
-    from moviepy.editor import (
+    # MoviePy 2.x uses `from moviepy import …` (no .editor sub-module)
+    from moviepy import (
         VideoFileClip,
         ImageClip,
         CompositeVideoClip,
@@ -196,12 +192,12 @@ def post_produce(raw_path: str, title: str, final_path: str, tmp_dir: str) -> st
     duration = video.duration
     w, h = video.size
 
-    # Title overlay
+    # Title overlay — MoviePy 2.x uses .with_duration / .with_position
     title_arr = make_title_frame(title, w, h)
     title_clip = (
-        ImageClip(title_arr, ismask=False)
-        .set_duration(duration)
-        .set_position(("center", "top"))
+        ImageClip(title_arr)
+        .with_duration(duration)
+        .with_position(("center", "top"))
     )
 
     composite = CompositeVideoClip([video, title_clip])
@@ -214,10 +210,11 @@ def post_produce(raw_path: str, title: str, final_path: str, tmp_dir: str) -> st
             if audio.duration < duration:
                 loops = int(np.ceil(duration / audio.duration))
                 audio = concatenate_audioclips([audio] * loops)
-            audio = audio.subclip(0, duration).volumex(0.35)
-            composite = composite.set_audio(audio)
+            # MoviePy 2.x: subclipped / with_volume_scaled (replaces subclip / volumex)
+            audio = audio.subclipped(0, duration).with_volume_scaled(0.35)
+            composite = composite.with_audio(audio)
         except Exception:
-            pass
+            pass  # skip music silently if download or load fails
 
     composite.write_videofile(
         final_path,
@@ -247,7 +244,7 @@ topic = st.text_area(
     "Topic or raw data",
     placeholder=(
         "e.g.  Top 10 Fastest Aircraft Mach Speeds over time\n"
-        "      Global CO₂ emissions by country 1960-2020\n"
+        "      Global male vs female population 2000–2026\n"
         "      Or paste a CSV directly"
     ),
     height=110,
@@ -268,7 +265,7 @@ if generate:
             raw_mp4 = os.path.join(tmp_dir, "race.mp4")
             final_mp4 = os.path.join(tmp_dir, "reel.mp4")
 
-            # ── Stage 1: Research / Parse Data ────────────────────────────────
+            # Stage 1 — Research / Parse Data
             progress.progress(8, text="Researching data…")
             status.info("🔍  Researching and structuring data with AI…")
 
@@ -277,13 +274,13 @@ if generate:
             progress.progress(33, text="Data ready — building animation…")
             status.info(f"📊  Generating animation for: **{chart_title}**")
 
-            # ── Stage 2: Generate Animation ───────────────────────────────────
+            # Stage 2 — Generate Animation
             create_race_video(df, raw_mp4)
 
             progress.progress(68, text="Animation done — finalizing Reel…")
             status.info("🎬  Adding title overlay and music…")
 
-            # ── Stage 3: Post-Production ──────────────────────────────────────
+            # Stage 3 — Post-Production
             post_produce(raw_mp4, chart_title, final_mp4, tmp_dir)
 
             progress.progress(100, text="Done!")
