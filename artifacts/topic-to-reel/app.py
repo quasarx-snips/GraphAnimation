@@ -305,32 +305,60 @@ def temporal_resample(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
 
 # ── Units ──────────────────────────────────────────────────────────────────────
 def detect_units(topic: str, df: pd.DataFrame) -> dict:
+    cols   = list(df.columns)
     sample = {c: {"first": float(df[c].iloc[0]), "last": float(df[c].iloc[-1])}
-              for c in list(df.columns)[:3]}
+              for c in cols[:4]}
     try:
         resp = client.chat.completions.create(
             model="gpt-5.1",
             messages=[{"role": "user", "content": (
-                f'Topic: "{topic}", sample: {json.dumps(sample)}.\n'
-                'Return ONLY JSON: {"prefix":"$","suffix":"","description":"USD Billions"}'
+                f'Data topic: "{topic}"\n'
+                f'Column names: {cols}\n'
+                f'Sample values: {json.dumps(sample)}\n\n'
+                'Identify the REAL measurement units for these values.\n'
+                'Return ONLY valid JSON — no markdown, no extra text:\n'
+                '{\n'
+                '  "prefix": "currency symbol if monetary (e.g. $), else empty string",\n'
+                '  "suffix": "unit appended after number (e.g. %, M, km, °C, ships/day), else empty string",\n'
+                '  "description": "short human-readable unit label (e.g. GDP in USD Billions, Market share (%), Ships per day, Population)",\n'
+                '  "is_pct": true if values are already percentages on a 0-100 scale else false\n'
+                '}\n\n'
+                'Examples:\n'
+                '  GDP ($B)     → {"prefix":"$","suffix":"B","description":"GDP (USD Billions)","is_pct":false}\n'
+                '  Market share → {"prefix":"","suffix":"%","description":"Market share (%)","is_pct":true}\n'
+                '  Population   → {"prefix":"","suffix":"","description":"Population","is_pct":false}\n'
+                '  Temperature  → {"prefix":"","suffix":"°C","description":"Temperature (°C)","is_pct":false}\n'
+                '  EV sales     → {"prefix":"","suffix":"","description":"Electric vehicles sold","is_pct":false}\n'
+                '  Ships per day→ {"prefix":"","suffix":"","description":"Ships per day","is_pct":false}\n\n'
+                'DO NOT default to USD unless the data is explicitly monetary. Infer from the topic and column names.'
             )}],
-            max_completion_tokens=60,
+            max_completion_tokens=120,
         )
-        raw = resp.choices[0].message.content.strip().strip("```json").strip("```")
+        raw = resp.choices[0].message.content.strip()
+        raw = raw.strip("```json").strip("```").strip()
         u   = json.loads(raw)
-        u.setdefault("prefix", ""); u.setdefault("suffix", ""); u.setdefault("description", "")
+        u.setdefault("prefix", "")
+        u.setdefault("suffix", "")
+        u.setdefault("description", "")
+        u.setdefault("is_pct", False)
         return u
     except Exception:
-        return {"prefix": "", "suffix": "", "description": ""}
+        return {"prefix": "", "suffix": "", "description": "", "is_pct": False}
 
 def fmt(val: float, u: dict) -> str:
-    p, sf, av = u.get("prefix",""), u.get("suffix",""), abs(val)
+    p, sf   = u.get("prefix", ""), u.get("suffix", "")
+    is_pct  = u.get("is_pct", False) or sf.strip() == "%"
+    av      = abs(val)
+    # Percentages: never abbreviate, just show 1 decimal
+    if is_pct:
+        return f"{p}{val:.1f}{sf}"
+    # Large numbers: abbreviate
     if av >= 5e11: return f"{p}{val/1e12:.2f}T{sf}"
     if av >= 5e8:  return f"{p}{val/1e9:.2f}B{sf}"
     if av >= 5e5:  return f"{p}{val/1e6:.2f}M{sf}"
-    if av >= 5e2:  return f"{p}{val/1e3:.1f}K{sf}"
+    if av >= 2e3:  return f"{p}{val/1e3:.1f}K{sf}"
     if av >= 1:    return f"{p}{val:.1f}{sf}"
-    return f"{p}{val:.2f}{sf}"
+    return f"{p}{val:.3f}{sf}"
 
 # ── Caption ────────────────────────────────────────────────────────────────────
 def generate_caption(topic: str, chart_title: str,
@@ -446,6 +474,11 @@ def _make_figure(chart_title: str, subtitle: str) -> tuple:
     period_txt = fig.text(0.50, 0.115, "",
                           ha="center", va="center",
                           fontsize=34, fontweight="bold", color="#FFFFFF")
+
+    # Persistent CTA — always visible at very bottom of every frame
+    fig.text(0.50, 0.030, "Read caption to know more",
+             ha="center", va="center",
+             fontsize=7.5, color="#4A4A4A", fontstyle="italic")
 
     return fig, ax, period_txt
 
@@ -705,54 +738,54 @@ def create_bar_race_video(
 
     Y_MAT  = np.column_stack([y_interp[c] for c in cols])
     x_max  = float(Y_MAT.max()) * 1.08 or 1.0
-    BAR_H  = 0.30    # thin, sharp bars
-    LERP   = 0.14    # per-frame interpolation speed for rank transitions
-    # Icon display size (display points) — sits centred on the bar
-    ICON_DP_B = 20
+    BAR_H  = 0.38    # sharp, vivid bar height
+    LERP   = 0.14    # per-frame lerp speed for rank transitions
+    # Icon inside bar: display points; zoom relative to 48px source
+    ICON_DP_B = 22
     ICON_ZM_B = ICON_DP_B / 48.0
+    # Minimum bar width (in data coords) before icon is hidden
+    ICON_MIN_V = x_max * 0.08
 
     unit_desc = units.get("description", "")
     fig, ax, period_txt = _make_figure(chart_title, unit_desc)
 
-    # All spines off; we draw a thin baseline at x=0 ourselves
+    # All spines off; thin vertical baseline at x=0
     for sp in ax.spines.values():
         sp.set_visible(False)
     ax.set_yticks([])
     ax.xaxis.set_visible(False)
 
-    # x range: include a left label strip (negative x = label area)
-    LABEL_STRIP = x_max * 0.30   # data units reserved on the left for labels
-    ax.set_xlim(-LABEL_STRIP, x_max * 1.04)
+    # Left label strip (negative x region)
+    LABEL_STRIP = x_max * 0.28
+    ax.set_xlim(-LABEL_STRIP, x_max * 1.06)
     ax.set_ylim(-0.65, n_bars - 0.35)
-    ax.invert_yaxis()   # rank-0 (highest) at the top
+    ax.invert_yaxis()   # rank-0 (highest) at top
 
-    # Thin baseline
-    ax.axvline(x=0, color="#333333", linewidth=0.6, zorder=1)
+    ax.axvline(x=0, color="#2A2A2A", linewidth=0.8, zorder=1)
 
-    # ── Initial ranking (sort descending by first-frame value) ─────────────────
-    init_vals    = {col: float(Y_MAT[0, i]) for i, col in enumerate(cols)}
-    sorted_init  = sorted(cols, key=lambda c: -init_vals[c])
-    # bar_ypos[col] = current animated y position (rank 0 = top due to invert)
-    bar_ypos     = {col: float(r) for r, col in enumerate(sorted_init)}
+    # ── Initial ranking — sort descending by first-frame values ───────────────
+    init_vals   = {col: float(Y_MAT[0, i]) for i, col in enumerate(cols)}
+    sorted_init = sorted(cols, key=lambda c: -init_vals[c])
+    bar_ypos    = {col: float(r) for r, col in enumerate(sorted_init)}
 
-    # ── Bar patches (plain Rectangle — sharp edges) ────────────────────────────
+    # ── Bar patches — plain Rectangles, antialiased=False for crisp edges ─────
     bar_patches: list[mpatches.Rectangle] = []
     for i, col in enumerate(cols):
-        y0 = bar_ypos[col]
+        y0   = bar_ypos[col]
         rect = mpatches.Rectangle(
             (0, y0 - BAR_H / 2), 0.001, BAR_H,
-            linewidth=0, facecolor=colors[i], zorder=4,
+            linewidth=0, facecolor=colors[i], zorder=4, antialiased=False,
         )
         ax.add_patch(rect)
         bar_patches.append(rect)
 
-    # ── Icons (AnnotationBbox) — centred on bar, inside the label strip ────────
+    # ── Icons — AnnotationBbox centred INSIDE the bar (x = v/2, y = bar_y) ───
     icon_boxes_b: list[AnnotationBbox] = []
     for i, col in enumerate(cols):
         y0  = bar_ypos[col]
         iim = OffsetImage(icon_arrays[i], zoom=ICON_ZM_B, interpolation="lanczos")
         iab = AnnotationBbox(
-            iim, (-LABEL_STRIP * 0.18, y0),
+            iim, (0.001, y0),
             xycoords="data",
             box_alignment=(0.5, 0.5),
             frameon=False, zorder=10, clip_on=False,
@@ -760,12 +793,12 @@ def create_bar_race_video(
         ax.add_artist(iab)
         icon_boxes_b.append(iab)
 
-    # ── Name labels (left of icon) ─────────────────────────────────────────────
+    # ── Name labels — left of baseline (label strip) ──────────────────────────
     name_labels: list = []
     for i, col in enumerate(cols):
         y0  = bar_ypos[col]
         lbl = ax.text(
-            -LABEL_STRIP * 0.33, y0, col,
+            -LABEL_STRIP * 0.12, y0, col,
             color=colors[i], fontsize=8.5, fontweight="bold",
             va="center", ha="right", zorder=12, clip_on=False,
         )
@@ -773,8 +806,8 @@ def create_bar_race_video(
 
     # ── Value labels at right tip of each bar ─────────────────────────────────
     val_labels: list = []
-    for i in range(n_bars):
-        y0  = list(bar_ypos.values())[i]
+    for i, col in enumerate(cols):
+        y0  = bar_ypos[col]
         lbl = ax.text(
             0.001, y0, "",
             color="#FFFFFF", fontsize=8.5, fontweight="bold",
@@ -786,18 +819,16 @@ def create_bar_race_video(
         f     = min(frame, total_frames-1)
         p_idx = int(np.clip(round(x_dense[f]), 0, n_periods-1))
 
-        # Current interpolated values
         cur_vals = {col: float(Y_MAT[f, ci]) for ci, col in enumerate(cols)}
 
         # Target ranking: highest value → rank 0 (top)
         sorted_cols  = sorted(cols, key=lambda c: -cur_vals[c])
         target_ranks = {col: float(r) for r, col in enumerate(sorted_cols)}
 
-        # Smooth position lerp — gradual overtake animation
+        # Smooth lerp → gradual overtake
         for col in cols:
             bar_ypos[col] += (target_ranks[col] - bar_ypos[col]) * LERP
 
-        # Update each bar, icon, and label using the lerped position
         for i, col in enumerate(cols):
             y  = bar_ypos[col]
             v  = cur_vals[col]
@@ -806,10 +837,14 @@ def create_bar_race_video(
             bar_patches[i].set_y(y - BAR_H / 2)
             bar_patches[i].set_width(vw)
 
-            icon_boxes_b[i].xy = (-LABEL_STRIP * 0.18, y)
+            # Icon: centre of bar (x = v/2, y = bar rank pos); hide when bar is tiny
+            icon_x = vw / 2.0
+            icon_boxes_b[i].xy = (icon_x, y)
+            icon_boxes_b[i].set_visible(vw >= ICON_MIN_V)
+
             name_labels[i].set_y(y)
             val_labels[i].set_y(y)
-            val_labels[i].set_x(v + x_max * 0.012)
+            val_labels[i].set_x(v + x_max * 0.014)
             val_labels[i].set_text(fmt(v, units))
 
         period_txt.set_text(_format_period_label(idx_labels[p_idx]))
@@ -870,6 +905,137 @@ def post_produce(raw_path: str, final_path: str, tmp_dir: str) -> str:
     video.close()
     return final_path
 
+# ── Static preview renderer (final-frame snapshot, no network calls) ──────────
+def render_preview_frame(
+    df: pd.DataFrame,
+    idx_labels: list[str],
+    chart_title: str,
+    units: dict,
+    is_bar: bool = False,
+) -> bytes:
+    """
+    Render the final state of the chart as a PNG (bytes).
+    Uses initials-only icons so it's instant — no flag fetching.
+    """
+    from matplotlib.offsetbox import AnnotationBbox, OffsetImage
+
+    cols     = list(df.columns)[:len(LINE_COLORS)]
+    n_series = len(cols)
+    colors   = LINE_COLORS[:n_series]
+    icon_arrs = [_initials(colors[i], cols[i], 48) for i in range(n_series)]
+    unit_desc = units.get("description", "")
+
+    if is_bar:
+        # ── Bar preview ───────────────────────────────────────────────────────
+        final_vals  = {col: float(df[col].iloc[-1]) for col in cols}
+        sorted_cols = sorted(cols, key=lambda c: -final_vals[c])
+        x_max       = max(final_vals.values()) * 1.08 or 1.0
+        BAR_H       = 0.38
+        LABEL_STRIP = x_max * 0.28
+        ICON_ZM     = 22 / 48.0
+        ICON_MIN_V  = x_max * 0.08
+
+        fig, ax, period_txt = _make_figure(chart_title, unit_desc)
+        period_txt.set_text(_format_period_label(idx_labels[-1]))
+
+        for sp in ax.spines.values():
+            sp.set_visible(False)
+        ax.set_yticks([]); ax.xaxis.set_visible(False)
+        ax.set_xlim(-LABEL_STRIP, x_max * 1.06)
+        ax.set_ylim(-0.65, n_series - 0.35)
+        ax.invert_yaxis()
+        ax.axvline(x=0, color="#2A2A2A", linewidth=0.8, zorder=1)
+
+        for rank, col in enumerate(sorted_cols):
+            v   = final_vals[col]
+            ci  = cols.index(col)
+            c   = colors[ci]
+            vw  = max(v, 0.001)
+            ax.add_patch(mpatches.Rectangle(
+                (0, rank - BAR_H / 2), vw, BAR_H,
+                linewidth=0, facecolor=c, zorder=4, antialiased=False,
+            ))
+            if vw >= ICON_MIN_V:
+                iab = AnnotationBbox(
+                    OffsetImage(icon_arrs[ci], zoom=ICON_ZM, interpolation="lanczos"),
+                    (vw / 2, float(rank)), xycoords="data",
+                    box_alignment=(0.5, 0.5), frameon=False, zorder=10, clip_on=False,
+                )
+                ax.add_artist(iab)
+            ax.text(-LABEL_STRIP * 0.12, rank, col,
+                    color=c, fontsize=8.5, fontweight="bold",
+                    va="center", ha="right", clip_on=False)
+            ax.text(v + x_max * 0.014, rank, fmt(v, units),
+                    color="#FFFFFF", fontsize=8.5, fontweight="bold",
+                    va="center", ha="left", clip_on=False)
+    else:
+        # ── Line preview ──────────────────────────────────────────────────────
+        n      = len(df)
+        vals   = df[cols].values.astype(float)
+        y_min  = vals.min(); y_max = vals.max()
+        y_rng  = max(y_max - y_min, 1.0)
+        y_pad  = y_rng * 0.08
+        ylim_lo = y_min - y_pad
+        ylim_hi = y_max + y_pad * 2.5
+        ICON_DP = 22; ICON_ZOOM = ICON_DP / 48.0
+
+        fig, ax, period_txt = _make_figure(chart_title, unit_desc)
+        period_txt.set_text(_format_period_label(idx_labels[-1]))
+
+        ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: fmt(v, units)))
+        ax.tick_params(axis="y", labelcolor="#666666", labelsize=8, length=0, pad=4)
+        tick_step = max(1, n // 6)
+        tick_pos  = list(range(0, n, tick_step))
+        ax.set_xticks(tick_pos)
+        ax.set_xticklabels([idx_labels[i] for i in tick_pos],
+                           color="#555555", fontsize=8)
+        ax.set_xlim(-0.35, n - 0.65)
+        ax.set_ylim(ylim_lo, ylim_hi)
+
+        raw_ypos = [float(vals[-1, i]) for i in range(n_series)]
+        nudged   = avoid_collisions(raw_ypos, (ylim_hi - ylim_lo) * 0.055)
+        cur_ylim = (ylim_lo, ylim_hi)
+        ylim_span = ylim_hi - ylim_lo
+
+        for i, col in enumerate(cols):
+            c    = colors[i]
+            x    = list(range(n))
+            y    = vals[:, i]
+            xend = float(n - 1)
+            yend = float(y[-1])
+            ny   = float(np.clip(nudged[i],
+                                 cur_ylim[0] + ylim_span * 0.02,
+                                 cur_ylim[1] - ylim_span * 0.02))
+
+            ax.plot(x, y, color=c, linewidth=2.2,
+                    solid_capstyle="round", zorder=4)
+            ax.plot(xend, yend, "o", color=c, markersize=28, alpha=0.10,
+                    clip_on=False, zorder=6)
+            ax.plot(xend, yend, "o", color=c, markersize=16, alpha=0.22,
+                    clip_on=False, zorder=7)
+            ax.plot(xend, yend, "o", color=c, markersize=7,
+                    markeredgecolor="#FFFFFF", markeredgewidth=1.4,
+                    clip_on=False, zorder=9)
+
+            iab = AnnotationBbox(
+                OffsetImage(icon_arrs[i], zoom=ICON_ZOOM, interpolation="lanczos"),
+                (xend + 0.08, ny), xycoords="data",
+                box_alignment=(0, 0.5), frameon=False, zorder=10, clip_on=False,
+            )
+            ax.add_artist(iab)
+            ax.text(xend + 0.55, ny,
+                    f"{col}\n{fmt(yend, units)}",
+                    color=c, fontsize=8.5, fontweight="bold",
+                    va="center", ha="left", clip_on=False,
+                    multialignment="left", linespacing=1.4)
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", facecolor=BG, dpi=DPI // 2,
+                bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    return buf.read()
+
 # ── Trending topics ────────────────────────────────────────────────────────────
 def _reddit(sub: str, n: int = 5) -> list[str]:
     try:
@@ -928,29 +1094,46 @@ with col_h2:
 
 # ── Session state ──────────────────────────────────────────────────────────────
 _defaults: dict = {
-    "topic_value":    "",
-    "pending_df":     None,
-    "pending_title":  "",
-    "pending_topic":  "",
-    "pending_labels": None,
-    "last_video":     None,
-    "last_caption":   "",
-    "last_hashtags":  [],
-    "history":        [],
-    "custom_icons":   {},
+    "topic_value":          "",
+    "pending_df":           None,
+    "pending_title":        "",
+    "pending_topic":        "",
+    "pending_labels":       None,
+    "pending_units":        {},
+    "pending_preview_bytes": None,
+    "last_video":           None,
+    "last_caption":         "",
+    "last_hashtags":        [],
+    "history":              [],
+    "custom_icons":         {},
 }
 for k, v in _defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
 def _store_df(df: pd.DataFrame, title: str, topic: str) -> None:
+    """Resample → detect units → render preview → store all in session state."""
     try:
         df_rs, labels = temporal_resample(df)
     except ResamplingFrequencyMismatch:
         df_rs, labels = df, [str(v) for v in df.index]
+
+    # Detect units (fast LLM call — max 120 tokens)
+    try:
+        units = detect_units(topic, df_rs)
+    except Exception:
+        units = {"prefix": "", "suffix": "", "description": "", "is_pct": False}
+
+    # Render final-frame preview (pure matplotlib, no network)
+    try:
+        preview_bytes = render_preview_frame(df_rs, labels, title, units, is_bar=False)
+    except Exception:
+        preview_bytes = None
+
     st.session_state.update(
         pending_df=df_rs, pending_title=title,
         pending_topic=topic, pending_labels=labels,
+        pending_units=units, pending_preview_bytes=preview_bytes,
         custom_icons={},
     )
 
@@ -1069,6 +1252,19 @@ with tab_csv:
 if st.session_state["pending_df"] is not None:
     pdf = st.session_state["pending_df"]
     st.divider()
+
+    # ── Static chart preview (final-frame snapshot) ────────────────────────
+    if st.session_state.get("pending_preview_bytes"):
+        st.markdown("##### Chart preview")
+        col_l, col_c, col_r = st.columns([1, 5, 1])
+        with col_c:
+            st.image(
+                st.session_state["pending_preview_bytes"],
+                caption="Final frame — units: "
+                        + st.session_state.get("pending_units", {}).get("description", "values"),
+                use_container_width=True,
+            )
+
     with st.expander(
         f"📊 **{st.session_state['pending_title']}** — "
         f"{len(pdf)} rows × {len(pdf.columns)} series", expanded=False
@@ -1159,7 +1355,9 @@ if generate and st.session_state["pending_df"] is not None:
             n_lines     = min(len(df.columns), len(LINE_COLORS))
             df_use      = df.iloc[:, :n_lines]
             colors_used = LINE_COLORS[:n_lines]
-            units       = detect_units(topic_str, df_use)
+            # Reuse units already detected at data-load time (avoids duplicate LLM call)
+            cached_units = st.session_state.get("pending_units") or {}
+            units = cached_units if cached_units else detect_units(topic_str, df_use)
 
             progress.progress(14, text="Fetching icons…")
             status.info("🏳  Fetching category icons…")
