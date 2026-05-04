@@ -3,6 +3,7 @@ modules = ["nodejs-24", "python-3.11"]
 [deployment]
 router = "application"
 deploymentTarget = "autoscale"
+run = ["streamlit", "run", "app.py", "--server.port", "5000"]
 
 [deployment.postBuild]
 args = ["pnpm", "store", "prune"]
@@ -33,8 +34,9 @@ waitForPort = 5000
 outputType = "webview"
 
 [agent]
-stack = "PNPM_WORKSPACE"
+stack = "STREAMLIT"
 expertMode = true
+integrations = ["python_openai_ai_integrations:1.0.0"]
 
 [postMerge]
 path = "scripts/post-merge.sh"
@@ -58,4 +60,4 @@ externalPort = 3000
 
 [nix]
 channel = "stable-25_05"
-packages = ["cairo", "ffmpeg-full", "freetype", "ghostscript", "glibcLocales", "gobject-introspection", "gtk3", "imagemagickBig", "lcms2", "libimagequant", "libjpeg", "libtiff", "libwebp", "libxcrypt", "openjpeg", "pkg-config", "qhull", "tcl", "tk", "zlib"]
+packages = ["cairo", "ffmpeg-full", "freetype", "ghostscript", "glibcLocales", "gobject-introspection", "gtk3", "imagemagickBig", "lcms2", "libimagequant", "libjpeg", "libtiff", "libwebp", "libxcrypt", "openjpeg", "pkg-config", "qhull", "tcl", "tk", "xsimd", "zlib"]
