@@ -3,7 +3,7 @@ Topic-to-Reel — 1080×1920 animated line-chart race for Instagram Reels.
 """
 from __future__ import annotations
 
-import shutil, io, json, os, tempfile, time, calendar, traceback
+import re, shutil, io, json, os, tempfile, time, calendar, traceback
 from datetime import datetime
 
 import matplotlib
@@ -43,10 +43,10 @@ REDDIT_UA   = {"User-Agent": "TopicToReel/1.0"}
 BRAND       = "worldstats.visualised"
 BG          = "#000000"
 FPS         = 30
-ICON_PX     = 54        # target icon side-length in video pixels
-# Gridspec margins (left/right/top/bottom in figure fraction)
-AX_L, AX_R, AX_T, AX_B = 0.12, 0.66, 0.91, 0.09
-ZOOM_SECS   = 3.0       # seconds for y-zoom intro
+ICON_PX     = 32        # icon side-length in video pixels (smaller)
+# Gridspec margins — centred layout, right strip for labels
+AX_L, AX_R, AX_T, AX_B = 0.10, 0.72, 0.88, 0.07
+ZOOM_SECS   = 3.0
 FALLBACK_TOPICS = [
     "US vs China GDP 1980–2024",
     "Global CO₂ by continent 1990–2023",
@@ -57,6 +57,22 @@ FALLBACK_TOPICS = [
     "Top social media platforms by users 2012–2024",
     "India vs USA vs China population 2000–2024",
 ]
+
+# ── Column-name suffixes that should be stripped ───────────────────────────────
+_COL_SUFFIXES = {
+    "pop", "population", "gdp", "val", "value", "pct", "percent", "perc",
+    "bn", "b", "tn", "t", "mn", "m", "k", "share", "total", "count",
+    "num", "number", "rate", "growth", "index", "idx", "score", "data",
+    "stat", "stats", "avg", "mean", "sum", "abs", "rel",
+}
+
+def _clean_col_name(name: str) -> str:
+    """'India_pop' → 'India', 'us_gdp_bn' → 'Us' (title-cased noun keyword)."""
+    parts = re.split(r"[_\-\s]+", str(name).strip())
+    kept  = [p for p in parts if p and p.lower() not in _COL_SUFFIXES]
+    if not kept:
+        kept = parts[:1]
+    return " ".join(p.capitalize() for p in kept)
 
 # ── Custom exception types ─────────────────────────────────────────────────────
 class DataIndexError(ValueError):
@@ -79,14 +95,14 @@ def _font(size: int) -> ImageFont.FreeTypeFont:
         return ImageFont.load_default()
 
 # ── Icon helpers ───────────────────────────────────────────────────────────────
-def _to_circle(pil: Image.Image, size: int = 64) -> np.ndarray:
+def _to_circle(pil: Image.Image, size: int = 48) -> np.ndarray:
     img  = pil.convert("RGBA").resize((size, size), Image.LANCZOS)
     mask = Image.new("L", (size, size), 0)
     ImageDraw.Draw(mask).ellipse((0, 0, size, size), fill=255)
     img.putalpha(mask)
     return np.array(img)
 
-def _initials(color_hex: str, label: str, size: int = 64) -> np.ndarray:
+def _initials(color_hex: str, label: str, size: int = 48) -> np.ndarray:
     img  = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     r = int(color_hex[1:3], 16); g = int(color_hex[3:5], 16); b = int(color_hex[5:7], 16)
@@ -99,7 +115,23 @@ def _initials(color_hex: str, label: str, size: int = 64) -> np.ndarray:
               letter, fill=(255, 255, 255, 255), font=font)
     return np.array(img)
 
-def _flag(code: str, size: int = 64) -> np.ndarray | None:
+def _make_glow(color_hex: str, size: int = 64) -> np.ndarray:
+    """Soft radial glow image in the given color."""
+    rv = int(color_hex[1:3], 16) / 255.0
+    gv = int(color_hex[3:5], 16) / 255.0
+    bv = int(color_hex[5:7], 16) / 255.0
+    img = np.zeros((size, size, 4), dtype=np.float32)
+    cx, cy = size / 2.0, size / 2.0
+    Y_g, X_g = np.mgrid[0:size, 0:size]
+    dist  = np.sqrt((X_g - cx) ** 2 + (Y_g - cy) ** 2)
+    alpha = np.clip(1.0 - dist / (size / 2.0), 0.0, 1.0) ** 1.8 * 0.50
+    img[..., 0] = rv
+    img[..., 1] = gv
+    img[..., 2] = bv
+    img[..., 3] = alpha
+    return (img * 255).astype(np.uint8)
+
+def _flag(code: str, size: int = 48) -> np.ndarray | None:
     try:
         r = requests.get(f"https://flagcdn.com/48x36/{code.lower()}.png", timeout=6)
         if r.status_code == 200:
@@ -107,6 +139,10 @@ def _flag(code: str, size: int = 64) -> np.ndarray | None:
     except Exception:
         pass
     return None
+
+def _country_emoji(code: str) -> str:
+    """ISO 3166-1 alpha-2 → emoji flag string (e.g. 'in' → '🇮🇳')."""
+    return "".join(chr(0x1F1E6 + ord(c) - ord("A")) for c in code.upper())
 
 def _identify_countries(cols: list[str]) -> dict[str, str | None]:
     resp = client.chat.completions.create(
@@ -124,10 +160,24 @@ def _identify_countries(cols: list[str]) -> dict[str, str | None]:
     except Exception:
         return {c: None for c in cols}
 
-def get_icons(cols: list[str], colors: list[str], size: int = 64) -> list[np.ndarray]:
+def get_icons(
+    cols: list[str],
+    colors: list[str],
+    size: int = 48,
+    custom_icons: dict | None = None,
+) -> list[np.ndarray]:
+    if custom_icons is None:
+        custom_icons = {}
     cmap = _identify_countries(cols)
     out  = []
     for i, col in enumerate(cols):
+        if col in custom_icons:
+            try:
+                pil  = Image.open(io.BytesIO(custom_icons[col]))
+                out.append(_to_circle(pil, size))
+                continue
+            except Exception:
+                pass
         code = cmap.get(col)
         icon = _flag(code, size) if code else None
         out.append(icon if icon is not None else _initials(colors[i], col, size))
@@ -141,6 +191,7 @@ def _clean_df(df: pd.DataFrame) -> pd.DataFrame:
     df = df.ffill().bfill().fillna(0)
     if len(df) < 2:
         raise DataIndexError("Data must have at least 2 rows (time periods).")
+    df.columns = [_clean_col_name(c) for c in df.columns]
     return df
 
 def extract_data_from_llm(topic: str) -> tuple[pd.DataFrame, str]:
@@ -150,7 +201,8 @@ def extract_data_from_llm(topic: str) -> tuple[pd.DataFrame, str]:
             {"role": "system", "content": "Return ONLY clean CSV. No markdown."},
             {"role": "user",   "content": (
                 f'Topic: "{topic}"\n'
-                "Rules: first col = integer year (no gaps), 2–6 category cols (≤18 chars), "
+                "Rules: first col = integer year (no gaps), 2–6 category cols (≤18 chars, "
+                "short noun-only names e.g. 'India' not 'India_pop'), "
                 "raw numeric values only, 15–30 rows, realistic trends. Return ONLY CSV."
             )},
         ],
@@ -188,7 +240,8 @@ def parse_pasted_data(raw_text: str) -> tuple[pd.DataFrame, str]:
             {"role": "user",   "content": (
                 "Convert this data into a clean CSV:\n"
                 "- First column: time index (Year/Month/etc.)\n"
-                "- Remaining: numeric series, raw values only\n\n"
+                "- Remaining: short noun-only column names (e.g. 'India' not 'India_pop')\n"
+                "- Numeric values only\n\n"
                 f"Data:\n{raw_text}\n\nReturn ONLY the CSV."
             )},
         ],
@@ -208,13 +261,6 @@ def parse_pasted_data(raw_text: str) -> tuple[pd.DataFrame, str]:
 
 # ── Temporal granularity ───────────────────────────────────────────────────────
 def temporal_resample(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
-    """
-    Auto-detect ΔT from index and resample:
-      ΔT > 20 years  → annual (no change)
-      1 < ΔT ≤ 20    → keep annual, just relabel
-      ΔT ≤ 1         → weekly steps via spline
-    Returns (new_df with integer 0-based index, idx_labels list).
-    """
     idx = df.index.tolist()
     try:
         nums = [float(str(v).strip()) for v in idx]
@@ -224,11 +270,9 @@ def temporal_resample(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     delta = nums[-1] - nums[0]
 
     if delta > 1:
-        # Annual or multi-year — keep as-is
         return df, [str(v) for v in idx]
 
     elif 0 < delta <= 1:
-        # Weekly interpolation (e.g. data spans ≤1 year)
         n_weeks = max(4, round(delta * 52) + 1)
         x_orig  = np.linspace(0, 1, len(df))
         x_fine  = np.linspace(0, 1, n_weeks)
@@ -318,17 +362,11 @@ def generate_caption(topic: str, chart_title: str,
 # ── Collision avoidance ────────────────────────────────────────────────────────
 def avoid_collisions(positions: list[float], min_gap: float,
                      iterations: int = 50) -> list[float]:
-    """
-    Force-directed y-nudging so labels don't overlap.
-    Works in sorted order so items never swap — maintains relative ordering.
-    """
     n = len(positions)
     if n <= 1:
         return list(positions)
-    # Sort indices by original y value
     order = sorted(range(n), key=lambda i: positions[i])
     pos   = np.array([positions[order[i]] for i in range(n)], dtype=float)
-    # Nudge in sorted order: pos[i] < pos[j] always (j > i)
     for _ in range(iterations):
         moved = False
         for i in range(n - 1):
@@ -340,7 +378,6 @@ def avoid_collisions(positions: list[float], min_gap: float,
                 moved     = True
         if not moved:
             break
-    # Map back to original indices
     result = [0.0] * n
     for sorted_i, orig_i in enumerate(order):
         result[orig_i] = float(pos[sorted_i])
@@ -363,55 +400,52 @@ def create_line_race_video(
     cols      = list(df.columns)
     colors    = LINE_COLORS[:n_lines]
 
-    # ── Catmull-Rom via CubicSpline (smooth between data points) ──────────────
+    # Precompute glow images for each series
+    glow_arrays = [_make_glow(c, 64) for c in colors]
+
+    # ── Catmull-Rom via CubicSpline ────────────────────────────────────────────
     total_frames = (n_periods - 1) * steps_per_period + 1
     x_raw        = np.arange(n_periods, dtype=float)
     x_dense      = np.linspace(0, n_periods - 1, total_frames)
 
-    # Vectorised precomputation — all series into a 2-D array
     y_interp: dict[str, np.ndarray] = {}
     for col in cols:
         raw_vals = df[col].values.astype(float)
-        cs       = CubicSpline(x_raw, raw_vals)          # natural cubic spline
+        cs       = CubicSpline(x_raw, raw_vals)
         interped = cs(x_dense)
-        # Soft-clip so spline overshoots don't produce wild values
         y_interp[col] = np.clip(interped,
                                 raw_vals.min() * 0.90,
                                 raw_vals.max() * 1.10)
 
-    # 2-D matrix shape (total_frames, n_lines) for fast column access
-    Y_MAT = np.column_stack([y_interp[c] for c in cols])  # vectorised
+    Y_MAT = np.column_stack([y_interp[c] for c in cols])
 
-    # ── Y-range from actual data ──────────────────────────────────────────────
+    # ── Y-range ───────────────────────────────────────────────────────────────
     y_min_data = float(Y_MAT.min())
     y_max_data = float(Y_MAT.max())
     y_range    = max(y_max_data - y_min_data, 1.0)
     y_pad      = y_range * 0.10
 
-    # Logarithmic scale if max/min ratio > 10× (and all positive)
     use_log = (y_min_data > 0) and ((y_max_data / y_min_data) > 10)
 
     if use_log:
-        ylim_lo  = y_min_data * 0.5
-        ylim_hi  = y_max_data * 2.0
-        y_total  = ylim_hi - ylim_lo          # linear span used for icon sizing only
+        ylim_lo = y_min_data * 0.5
+        ylim_hi = y_max_data * 2.0
+        y_total = ylim_hi - ylim_lo
     else:
-        ylim_lo  = y_min_data - y_pad
-        ylim_hi  = y_max_data + y_pad * 3.0
-        y_total  = ylim_hi - ylim_lo
+        ylim_lo = y_min_data - y_pad
+        ylim_hi = y_max_data + y_pad * 3.0
+        y_total = ylim_hi - ylim_lo
 
-    # ── Elastic X-axis boundaries ─────────────────────────────────────────────
-    xlim_lo        = -0.35
-    xlim_hi_max    = n_periods - 0.65
-    ELASTIC_AHEAD  = 1.65   # periods ahead of current point kept visible
+    xlim_lo       = -0.35
+    xlim_hi_max   = n_periods - 0.65
+    ELASTIC_AHEAD = 1.65
 
-    # ── Zoom animation (Y only, cubic ease-out, first ZOOM_SECS s) ───────────
     zoom_frames = 0 if use_log else min(int(ZOOM_SECS * FPS), total_frames // 3)
 
     # ── Figure geometry ───────────────────────────────────────────────────────
     FIG_W, FIG_H, DPI = 6.75, 12.0, 160
-    ax_w_px = (AX_R - AX_L) * FIG_W * DPI   # ≈ 626 px
-    ax_h_px = (AX_T - AX_B) * FIG_H * DPI   # ≈ 1574 px
+    ax_w_px = (AX_R - AX_L) * FIG_W * DPI
+    ax_h_px = (AX_T - AX_B) * FIG_H * DPI
 
     plt.rcParams.update({"font.family": "DejaVu Sans"})
     fig = plt.figure(figsize=(FIG_W, FIG_H), facecolor=BG, dpi=DPI)
@@ -425,118 +459,108 @@ def create_line_race_video(
         a.set_facecolor(BG)
         a.patch.set_facecolor(BG)
 
+    # ── Brand — top of figure ─────────────────────────────────────────────────
+    fig.text(0.50, 0.955, BRAND, ha="center", va="top",
+             fontsize=8.5, color="#444444", fontstyle="italic")
+
     # ── Title strip ───────────────────────────────────────────────────────────
     title_ax.axis("off")
-    # Centered chart title
-    title_ax.text(0.50, 0.72, chart_title,
+    title_ax.text(0.04, 0.72, chart_title,
                   transform=title_ax.transAxes, color="#FFFFFF",
-                  fontsize=15, fontweight="bold", ha="center", va="center")
-    title_ax.text(0.50, 0.20, "↓  Read caption for full story  ↓",
-                  transform=title_ax.transAxes, color="#666666",
-                  fontsize=7.5, ha="center", va="center", fontstyle="italic")
+                  fontsize=14, fontweight="bold", ha="left", va="center")
+    title_ax.text(0.04, 0.18, "↓  Read caption for full story  ↓",
+                  transform=title_ax.transAxes, color="#555555",
+                  fontsize=7, ha="left", va="center", fontstyle="italic")
+
+    # Period counter — top-right of title strip (animated)
+    period_txt = title_ax.text(
+        0.97, 0.65, "",
+        transform=title_ax.transAxes,
+        color="#FFFFFF", fontsize=22, fontweight="bold",
+        ha="right", va="center",
+    )
 
     # ── Chart spine / grid ────────────────────────────────────────────────────
-    for sp in ("top", "right"):
+    for sp in ("top", "right", "left", "bottom"):
         ax.spines[sp].set_visible(False)
-    for sp in ("left", "bottom"):
-        ax.spines[sp].set_color("#333333")
-        ax.spines[sp].set_linewidth(0.8)
 
     if use_log:
         ax.set_yscale("log")
         ax.yaxis.grid(False)
     else:
-        ax.yaxis.grid(True, color="#1A1A1A", linewidth=0.8, zorder=0)
+        ax.yaxis.grid(True, color="#1C1C1C", linewidth=0.7, zorder=0)
+        ax.xaxis.grid(False)
 
     ax.set_axisbelow(True)
     ax.set_facecolor(BG)
 
-    # ── Static axis configuration ─────────────────────────────────────────────
-    # X ticks at every period; labels placed from actual idx_labels
+    # ── Axes tick configuration ───────────────────────────────────────────────
     tick_step = max(1, n_periods // 6)
     tick_pos  = list(range(0, n_periods, tick_step))
     ax.set_xticks(tick_pos)
     ax.set_xticklabels([idx_labels[i] for i in tick_pos],
-                       color="#CCCCCC", fontsize=8.5)
-    ax.tick_params(axis="x", colors="#CCCCCC")
+                       color="#666666", fontsize=8)
+    ax.tick_params(axis="x", colors="#555555", length=0)
 
     ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: fmt(v, units)))
-    ax.tick_params(axis="y", labelcolor="#CCCCCC", labelsize=8.5)
+    ax.tick_params(axis="y", labelcolor="#555555", labelsize=7.5, length=0)
 
-    # Y-axis description (elevated slightly)
     unit_desc = units.get("description", "")
     if unit_desc:
-        ax.text(0.01, 0.998, f"Values in {unit_desc}",
-                transform=ax.transAxes, color="#888888",
-                fontsize=8, ha="left", va="top", fontstyle="italic")
+        ax.text(0.01, 0.998, f"in {unit_desc}",
+                transform=ax.transAxes, color="#555555",
+                fontsize=7, ha="left", va="top", fontstyle="italic")
 
-    # Initial limits — elastic x starts at first 2 periods
     ax.set_xlim(xlim_lo, min(xlim_lo + ELASTIC_AHEAD + 1.0, xlim_hi_max))
     ax.set_ylim(ylim_lo, ylim_hi)
 
-    # ── Legend (offset down for white-space) ─────────────────────────────────
-    ax.legend(
-        handles=[plt.Line2D([0], [0], color=colors[i], linewidth=2.2, label=cols[i])
-                 for i in range(n_lines)],
-        loc="upper left",
-        bbox_to_anchor=(0.01, 0.84),    # <-- pushed down from 1.0
-        frameon=True, framealpha=0.20,
-        facecolor="#0A0A0A", edgecolor="#333333",
-        labelcolor="#FFFFFF", fontsize=8.5,
-        handlelength=1.4, borderpad=0.6, labelspacing=0.4,
-    )
-
-    # ── Period (year) counter — top-left, aligned with legend text ───────────
-    period_txt = ax.text(
-        0.01, 0.97, "",
-        transform=ax.transAxes,
-        color="#FFFFFF", fontsize=26, fontweight="bold",
-        ha="left", va="top",
-    )
-
-    # ── Per-series artists ────────────────────────────────────────────────────
-    outer_glow, inner_glow, main_lines, val_labels, icon_ims = [], [], [], [], []
+    # ── Per-series artists (NO outer/inner line glow) ─────────────────────────
+    main_lines, val_labels, icon_ims, glow_ims = [], [], [], []
 
     for i, col in enumerate(cols):
         c = colors[i]
-        og, = ax.plot([], [], color=c, linewidth=18, alpha=0.07,
-                      solid_capstyle="round", zorder=2)
-        ig, = ax.plot([], [], color=c, linewidth=8,  alpha=0.18,
-                      solid_capstyle="round", zorder=3)
-        ml, = ax.plot([], [], color=c, linewidth=2.4,
+
+        ml, = ax.plot([], [], color=c, linewidth=2.2,
                       solid_capstyle="round", zorder=4)
-        # Icon via imshow — starts off-screen, moves along line tip
+
+        # Glow behind icon (imshow, starts off-screen)
+        gi = ax.imshow(glow_arrays[i],
+                       extent=[-99, -98, ylim_lo, ylim_lo + 1],
+                       zorder=8, clip_on=False, aspect="auto",
+                       interpolation="bilinear")
+
+        # Icon imshow
         im = ax.imshow(icon_arrays[i],
                        extent=[-99, -98, ylim_lo, ylim_lo + 1],
                        zorder=10, clip_on=False, aspect="auto",
                        interpolation="bilinear")
-        lbl = ax.text(0, 0, "", color=c,
-                      fontsize=8.5, fontweight="bold",
-                      va="center", ha="left", zorder=12, clip_on=False)
-        outer_glow.append(og); inner_glow.append(ig); main_lines.append(ml)
-        icon_ims.append(im);   val_labels.append(lbl)
 
-    # ── Branding ──────────────────────────────────────────────────────────────
-    fig.text(0.5, 0.018, BRAND, ha="center", va="bottom",
-             fontsize=7.5, color="#2E2E2E")
+        # Value label to the right of icon — name + value, two lines
+        lbl = ax.text(0, 0, "",
+                      color=c, fontsize=8, fontweight="bold",
+                      va="center", ha="left", zorder=12, clip_on=False,
+                      multialignment="left", linespacing=1.35)
+
+        main_lines.append(ml)
+        glow_ims.append(gi)
+        icon_ims.append(im)
+        val_labels.append(lbl)
 
     # ── Update function ───────────────────────────────────────────────────────
     def update(frame: int):
-        f          = min(frame, total_frames - 1)
-        current_x  = float(x_dense[f])
-        x_now_arr  = x_dense[:f + 1]
-        p_idx      = int(np.clip(round(current_x), 0, n_periods - 1))
+        f         = min(frame, total_frames - 1)
+        current_x = float(x_dense[f])
+        x_now_arr = x_dense[:f + 1]
+        p_idx     = int(np.clip(round(current_x), 0, n_periods - 1))
 
-        # ── 1. Elastic X-axis: grows from initial 2-point window ──────────────
-        xlim_right = min(current_x + ELASTIC_AHEAD, xlim_hi_max)
+        xlim_right  = min(current_x + ELASTIC_AHEAD, xlim_hi_max)
         ax.set_xlim(xlim_lo, xlim_right)
         cur_x_range = xlim_right - xlim_lo
 
-        # ── 2. Y-axis zoom intro (cubic ease-out, 2x → 1x over zoom_frames) ──
         if not use_log and zoom_frames > 0 and f < zoom_frames:
             t_raw   = f / zoom_frames
-            t_ease  = 1.0 - (1.0 - t_raw) ** 3      # cubic ease-out
-            zoom    = 2.0 - t_ease                    # 2.0 → 1.0
+            t_ease  = 1.0 - (1.0 - t_raw) ** 3
+            zoom    = 2.0 - t_ease
             center  = float(Y_MAT[f].mean())
             half_h  = y_total / (2.0 * zoom)
             new_ylo = max(ylim_lo, center - half_h)
@@ -548,48 +572,48 @@ def create_line_race_video(
                 ax.set_ylim(ylim_lo, ylim_hi)
             cur_y_range = y_total
 
-        # ── 3. Dynamic icon size (recomputed from live axis limits) ───────────
+        # Icon size in data coords
         dx = ICON_PX / ax_w_px * cur_x_range
         dy = ICON_PX / ax_h_px * cur_y_range
+        # Glow slightly larger than icon
+        gdx = dx * 2.0
+        gdy = dy * 2.0
 
-        # ── 4. Gather raw label y-positions for collision detection ───────────
-        raw_ypos: list[float] = []
-        for i in range(n_lines):
-            raw_ypos.append(float(Y_MAT[f, i]))
-
-        nudged = avoid_collisions(raw_ypos, dy * 1.15)
+        raw_ypos: list[float] = [float(Y_MAT[f, i]) for i in range(n_lines)]
+        nudged = avoid_collisions(raw_ypos, dy * 1.2)
         cur_ylim = ax.get_ylim()
 
-        # ── 5. Per-series update ──────────────────────────────────────────────
         for i, col in enumerate(cols):
             y_now_arr = y_interp[col][:f + 1]
-            outer_glow[i].set_data(x_now_arr, y_now_arr)
-            inner_glow[i].set_data(x_now_arr, y_now_arr)
             main_lines[i].set_data(x_now_arr, y_now_arr)
 
             if len(x_now_arr) > 0:
                 xend = float(x_now_arr[-1])
                 yend = float(y_now_arr[-1])
 
-                # Move icon along line tip
+                # Glow around icon
+                glow_ims[i].set_extent([
+                    xend - gdx / 2, xend + gdx / 2,
+                    yend - gdy / 2, yend + gdy / 2,
+                ])
+                # Icon at line tip
                 icon_ims[i].set_extent([
                     xend - dx / 2, xend + dx / 2,
                     yend - dy / 2, yend + dy / 2,
                 ])
 
-                # Collision-nudged label, clamped inside ylim
                 ny = float(np.clip(nudged[i],
                                    cur_ylim[0] + dy * 0.6,
                                    cur_ylim[1] - dy * 0.6))
                 val_labels[i].set_position(
-                    (xend + dx / 2 + cur_x_range * 0.018, ny))
+                    (xend + dx / 2 + cur_x_range * 0.022, ny))
                 val_labels[i].set_text(
-                    f"{col}: {fmt(float(Y_MAT[f, i]), units)}")
+                    f"{col}\n{fmt(float(Y_MAT[f, i]), units)}")
             else:
+                glow_ims[i].set_extent([-99, -98, ylim_lo, ylim_lo + 1])
                 icon_ims[i].set_extent([-99, -98, ylim_lo, ylim_lo + 1])
                 val_labels[i].set_text("")
 
-        # ── 6. Period counter (top-left) ──────────────────────────────────────
         period_txt.set_text(idx_labels[p_idx])
 
     # ── Render ────────────────────────────────────────────────────────────────
@@ -602,7 +626,7 @@ def create_line_race_video(
             fps=FPS, codec="libx264",
             extra_args=[
                 "-pix_fmt", "yuv420p", "-preset", "fast", "-crf", "17",
-                "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",  # ensure even dimensions
+                "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
             ],
         )
         ani.save(raw_path, writer=writer, dpi=DPI,
@@ -694,20 +718,31 @@ def get_trending_topics() -> list[str]:
 
 # ── Streamlit UI ───────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Topic-to-Reel", page_icon="🎬", layout="centered")
-st.title("Topic-to-Reel")
-st.caption("Generate a 1080×1920 animated Reel from a topic, file, or your own data.")
+
+# Header with brand inline
+col_h1, col_h2 = st.columns([3, 1])
+with col_h1:
+    st.title("Topic-to-Reel")
+    st.caption("Generate a 1080×1920 animated Reel from a topic, file, or your own data.")
+with col_h2:
+    st.markdown(
+        f"<div style='text-align:right;padding-top:28px;color:#555;font-style:italic;font-size:13px'>"
+        f"{BRAND}</div>",
+        unsafe_allow_html=True,
+    )
 
 # ── Session state init ────────────────────────────────────────────────────────
 _defaults: dict = {
-    "topic_value":   "",
-    "pending_df":    None,
-    "pending_title": "",
-    "pending_topic": "",
-    "pending_labels": None,     # idx_labels from temporal_resample
-    "last_video":    None,
-    "last_caption":  "",
-    "last_hashtags": [],
-    "history":       [],        # list of generation records
+    "topic_value":    "",
+    "pending_df":     None,
+    "pending_title":  "",
+    "pending_topic":  "",
+    "pending_labels": None,
+    "last_video":     None,
+    "last_caption":   "",
+    "last_hashtags":  [],
+    "history":        [],
+    "custom_icons":   {},   # col_name -> bytes
     "grid_df": pd.DataFrame({
         "Year":     [2020, 2021, 2022, 2023, 2024],
         "Series A": [100.0, 120.0, 145.0, 175.0, 210.0],
@@ -724,7 +759,6 @@ tab_ai, tab_upload, tab_paste, tab_grid = st.tabs([
 ])
 
 def _store_df(df: pd.DataFrame, title: str, topic: str) -> None:
-    """Store loaded dataframe + run temporal resampling."""
     try:
         df_rs, labels = temporal_resample(df)
     except ResamplingFrequencyMismatch:
@@ -732,6 +766,7 @@ def _store_df(df: pd.DataFrame, title: str, topic: str) -> None:
     st.session_state.update(
         pending_df=df_rs, pending_title=title,
         pending_topic=topic, pending_labels=labels,
+        custom_icons={},   # reset icons when new data loads
     )
 
 # ── Tab 1: AI Topic ───────────────────────────────────────────────────────────
@@ -805,13 +840,31 @@ with tab_paste:
 
 # ── Tab 4: Grid editor ────────────────────────────────────────────────────────
 with tab_grid:
-    st.markdown("Edit the table directly. **First column = time index**, rest = series.")
-    with st.expander("➕  Add a new column"):
+    st.markdown(
+        "Edit the table directly. **First column = time index**, rest = series.  \n"
+        "💡 Tip: click a row number to select it, then press **Delete** to remove that row."
+    )
+
+    # Add column
+    with st.expander("➕  Add a column"):
         c1, c2 = st.columns([3, 1])
         new_col = c1.text_input("Name", key="new_col_name",
                                 label_visibility="collapsed", placeholder="New series…")
         if c2.button("Add", key="add_col") and new_col.strip():
             st.session_state["grid_df"][new_col.strip()] = 0.0
+            st.rerun()
+
+    # Rename column
+    with st.expander("✏️  Rename a column"):
+        all_cols = list(st.session_state["grid_df"].columns)
+        rc1, rc2, rc3 = st.columns([2, 2, 1])
+        old_name = rc1.selectbox("Column", all_cols, key="rename_old",
+                                 label_visibility="collapsed")
+        new_name = rc2.text_input("New name", key="rename_new",
+                                  label_visibility="collapsed", placeholder="New name…")
+        if rc3.button("Rename", key="do_rename") and new_name.strip():
+            st.session_state["grid_df"] = st.session_state["grid_df"].rename(
+                columns={old_name: new_name.strip()})
             st.rerun()
 
     edited = st.data_editor(st.session_state["grid_df"], num_rows="dynamic",
@@ -822,6 +875,7 @@ with tab_grid:
         try:
             df    = edited.copy().set_index(edited.columns[0])
             df    = df.apply(pd.to_numeric, errors="coerce").ffill().bfill().fillna(0)
+            df.columns = [_clean_col_name(c) for c in df.columns]
             title = chart_title_input.strip() or "Custom Data Reel"
             _store_df(df, title, title)
             st.session_state["grid_df"] = edited
@@ -841,6 +895,38 @@ if st.session_state["pending_df"] is not None:
                      f"— {len(pdf)} rows × {len(pdf.columns)} series",
                      expanded=False):
         st.dataframe(pdf, use_container_width=True)
+
+    # ── Custom icon uploads ───────────────────────────────────────────────────
+    st.divider()
+    with st.expander("🖼️  Custom icons  (optional)", expanded=False):
+        st.caption(
+            "Upload a PNG/JPG per series — they'll be cropped to circles on the video. "
+            "Leave blank to use auto-detected flags or initials."
+        )
+        series_cols = list(st.session_state["pending_df"].columns)
+        icon_cols   = st.columns(min(len(series_cols), 4))
+        for i, col in enumerate(series_cols):
+            with icon_cols[i % 4]:
+                uploaded_icon = st.file_uploader(
+                    col, type=["png", "jpg", "jpeg", "webp"],
+                    key=f"icon_{col}",
+                )
+                if uploaded_icon is not None:
+                    st.session_state["custom_icons"][col] = uploaded_icon.read()
+                    st.image(
+                        Image.open(io.BytesIO(st.session_state["custom_icons"][col]))
+                            .resize((48, 48)),
+                        caption=col, width=48,
+                    )
+                elif col in st.session_state["custom_icons"]:
+                    st.image(
+                        Image.open(io.BytesIO(st.session_state["custom_icons"][col]))
+                            .resize((48, 48)),
+                        caption=f"{col} ✓", width=48,
+                    )
+                    if st.button("Remove", key=f"rm_icon_{col}"):
+                        del st.session_state["custom_icons"][col]
+                        st.rerun()
 
 # ── Settings ──────────────────────────────────────────────────────────────────
 st.divider()
@@ -895,7 +981,10 @@ if generate and st.session_state["pending_df"] is not None:
 
             progress.progress(14, text="Fetching icons…")
             status.info("🏳  Fetching category icons…")
-            icon_arrays = get_icons(list(df_use.columns), colors_used)
+            icon_arrays = get_icons(
+                list(df_use.columns), colors_used, size=48,
+                custom_icons=st.session_state.get("custom_icons", {}),
+            )
 
             progress.progress(22, text="Rendering animation…")
             n_frames = (len(df_use) - 1) * steps + 1
@@ -923,12 +1012,10 @@ if generate and st.session_state["pending_df"] is not None:
             with open(final_mp4, "rb") as fh:
                 video_bytes = fh.read()
 
-        # ── Cache in session state (prevents re-generation on download click) ─
         st.session_state["last_video"]    = video_bytes
         st.session_state["last_caption"]  = caption
         st.session_state["last_hashtags"] = hashtags
 
-        # ── Edit history (last 5) ─────────────────────────────────────────────
         st.session_state["history"].append({
             "ts":     datetime.now().strftime("%H:%M:%S"),
             "title":  chart_title,
@@ -950,13 +1037,12 @@ if generate and st.session_state["pending_df"] is not None:
         with st.expander("🔍 Debug trace"):
             st.code(traceback.format_exc())
 
-# ── Persistent output (cached — not re-generated on download click) ───────────
+# ── Persistent output ─────────────────────────────────────────────────────────
 if st.session_state["last_video"]:
     st.divider()
     st.subheader("Your Reel")
     st.video(st.session_state["last_video"])
 
-    # Download button uses cached bytes → no re-run of video generation
     st.download_button(
         "⬇️  Download MP4  (1080 × 1920)",
         st.session_state["last_video"],
