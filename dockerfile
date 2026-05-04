@@ -18,4 +18,4 @@ EXPOSE 7860
 
 # Command to run the app (Assuming your app is Flask and the file is main.py)
 # If your file is app.py, change "main:app" to "app:app"
-CMD ["gunicorn", "-b", "0.0.0.0:7860", "--timeout", "120", "main:app"]
+CMD ["gunicorn", "-b", "0.0.0.0:7860", "--timeout", 400", "main:app"]
