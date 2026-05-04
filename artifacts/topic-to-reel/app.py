@@ -464,7 +464,7 @@ def create_line_race_video(
     df        = df.iloc[:, :n_lines].copy()
     cols      = list(df.columns)
     colors    = LINE_COLORS[:n_lines]
-    glows     = [_make_glow(c, 64) for c in colors]
+    from matplotlib.offsetbox import AnnotationBbox, OffsetImage
 
     total_frames = (n_periods-1) * steps_per_period + 1
     x_raw   = np.arange(n_periods, dtype=float)
@@ -497,10 +497,15 @@ def create_line_race_video(
     xlim_hi_max   = n_periods - 0.65
     ELASTIC_AHEAD = 1.65
 
-    # Pixel extents for icon sizing
-    ax_w_px = (_AX_R - _AX_L) * FIG_W * DPI
-    ax_h_px = (_AX_T - _AX_B) * FIG_H * DPI
-    ICON_PX = 28
+    # Icon display sizes in points (1 point = 1/72 inch; DPI conversion handled by matplotlib)
+    # AnnotationBbox / OffsetImage renders at fixed display pixels regardless of data scale.
+    ICON_DP      = 22   # icon rendered size in display points
+    ICON_ZOOM    = ICON_DP / 48.0           # 48px source → 22pt display
+    GLOW_ZOOM    = (ICON_DP * 2.0) / 80.0  # 80px source → 44pt display
+    # Pixel offset (in display points) from line-tip dot to left edge of icon
+    DOT_TO_ICON  = 7
+    # Pixel offset from left edge of icon to left edge of text label
+    ICON_TO_LBL  = ICON_DP + 5
 
     unit_desc = units.get("description", "")
     fig, ax, period_txt = _make_figure(chart_title, unit_desc)
@@ -521,32 +526,58 @@ def create_line_race_video(
     ax.set_ylim(ylim_lo, ylim_hi)
 
     # Per-series artists
-    main_lines, tip_dots, tip_halos, glow_ims, icon_ims, val_labels = \
-        [], [], [], [], [], []
+    main_lines  = []
+    halo_outer  = []   # large soft glow ring
+    halo_inner  = []   # medium glow ring
+    tip_dots    = []   # crisp dot at line tip
+    icon_boxes  = []   # AnnotationBbox wrapping flag/initial icon
+    val_labels  = []
 
     for i, col in enumerate(cols):
         c = colors[i]
-        ml,  = ax.plot([], [], color=c, linewidth=2.0,
-                       solid_capstyle="round", zorder=4)
-        halo,= ax.plot([], [], "o", color=c, markersize=14, alpha=0.25,
-                       zorder=7, clip_on=False)
-        dot, = ax.plot([], [], "o", color=c, markersize=7,
-                       markerfacecolor=c, markeredgecolor="#FFFFFF",
-                       markeredgewidth=1.2, zorder=9, clip_on=False)
-        gi   = ax.imshow(glows[i],
-                         extent=[-99, -98, ylim_lo, ylim_lo+1],
-                         zorder=8, clip_on=False, aspect="auto",
-                         interpolation="bilinear")
-        im   = ax.imshow(icon_arrays[i],
-                         extent=[-99, -98, ylim_lo, ylim_lo+1],
-                         zorder=10, clip_on=False, aspect="auto",
-                         interpolation="bilinear")
-        lbl  = ax.text(0, 0, "",
-                       color=c, fontsize=8.5, fontweight="bold",
-                       va="center", ha="left", zorder=12, clip_on=False,
-                       multialignment="left", linespacing=1.4)
-        main_lines.append(ml); tip_halos.append(halo); tip_dots.append(dot)
-        glow_ims.append(gi); icon_ims.append(im); val_labels.append(lbl)
+        ml, = ax.plot([], [], color=c, linewidth=2.2,
+                      solid_capstyle="round", zorder=4)
+
+        # Layered glow: outer ring → inner ring → solid dot
+        ho, = ax.plot([], [], "o", color=c, markersize=28, alpha=0.10,
+                      zorder=6, clip_on=False)
+        hi, = ax.plot([], [], "o", color=c, markersize=16, alpha=0.22,
+                      zorder=7, clip_on=False)
+        dot,= ax.plot([], [], "o", color=c, markersize=7,
+                      markerfacecolor=c, markeredgecolor="#FFFFFF",
+                      markeredgewidth=1.4, zorder=9, clip_on=False)
+
+        # Icon via AnnotationBbox — pixel-accurate, no data-coord math
+        iim = OffsetImage(icon_arrays[i], zoom=ICON_ZOOM, interpolation="lanczos")
+        iab = AnnotationBbox(
+            iim, (0, 0), xycoords="data",
+            box_alignment=(0, 0.5),   # left-centre aligned at anchor point
+            frameon=False, zorder=10,
+            clip_on=False,
+        )
+        iab.set_visible(False)
+        ax.add_artist(iab)
+
+        lbl = ax.text(0, 0, "",
+                      color=c, fontsize=8.5, fontweight="bold",
+                      va="center", ha="left", zorder=12, clip_on=False,
+                      multialignment="left", linespacing=1.4)
+
+        main_lines.append(ml)
+        halo_outer.append(ho)
+        halo_inner.append(hi)
+        tip_dots.append(dot)
+        icon_boxes.append(iab)
+        val_labels.append(lbl)
+
+    # Cached transform — recalculated when axes limits change
+    _tf_cache: dict = {}
+
+    def _data_to_disp(x: float, y: float) -> tuple[float, float]:
+        return ax.transData.transform((x, y))
+
+    def _disp_to_data(xd: float, yd: float) -> tuple[float, float]:
+        return ax.transData.inverted().transform((xd, yd))
 
     def update(frame: int):
         f         = min(frame, total_frames-1)
@@ -554,31 +585,36 @@ def create_line_race_video(
         x_now_arr = x_dense[:f+1]
         p_idx     = int(np.clip(round(current_x), 0, n_periods-1))
 
-        xlim_right  = min(current_x + ELASTIC_AHEAD, xlim_hi_max)
+        xlim_right = min(current_x + ELASTIC_AHEAD, xlim_hi_max)
         ax.set_xlim(xlim_lo, xlim_right)
-        cur_x_range = xlim_right - xlim_lo
 
         if not use_log and zoom_frames > 0 and f < zoom_frames:
-            t_ease   = 1.0 - (1.0 - f/zoom_frames) ** 3
-            zoom     = 2.0 - t_ease
-            center   = float(Y_MAT[f].mean())
-            half_h   = y_total / (2.0 * zoom)
-            new_ylo  = max(ylim_lo, center - half_h)
-            new_yhi  = min(ylim_hi, center + half_h)
+            t_ease  = 1.0 - (1.0 - f/zoom_frames) ** 3
+            zoom    = 2.0 - t_ease
+            center  = float(Y_MAT[f].mean())
+            half_h  = y_total / (2.0 * zoom)
+            new_ylo = max(ylim_lo, center - half_h)
+            new_yhi = min(ylim_hi, center + half_h)
             ax.set_ylim(new_ylo, new_yhi)
-            cur_y_range = new_yhi - new_ylo
         else:
             if not use_log:
                 ax.set_ylim(ylim_lo, ylim_hi)
-            cur_y_range = y_total
 
-        dx   = ICON_PX / ax_w_px * cur_x_range
-        dy   = ICON_PX / ax_h_px * cur_y_range
-        gdx  = dx * 2.2; gdy = dy * 2.2
+        cur_ylim = ax.get_ylim()
+
+        # Compute a "1 data-unit on y" → display-pixels ratio for nudge gap
+        try:
+            _, y0_px = _data_to_disp(0, cur_ylim[0])
+            _, y1_px = _data_to_disp(0, cur_ylim[1])
+            px_per_y = abs(y1_px - y0_px)
+            ylim_span = cur_ylim[1] - cur_ylim[0]
+            # Minimum gap in data units = ICON_DP * 1.15 display points
+            min_gap_data = ICON_DP * 1.15 / px_per_y * ylim_span if px_per_y > 0 else ylim_span * 0.05
+        except Exception:
+            min_gap_data = (cur_ylim[1] - cur_ylim[0]) * 0.05
 
         raw_ypos = [float(Y_MAT[f, i]) for i in range(n_lines)]
-        nudged   = avoid_collisions(raw_ypos, dy * 1.3)
-        cur_ylim = ax.get_ylim()
+        nudged   = avoid_collisions(raw_ypos, min_gap_data)
 
         for i, col in enumerate(cols):
             y_arr = y_interp[col][:f+1]
@@ -587,26 +623,33 @@ def create_line_race_video(
             if len(x_now_arr) > 0:
                 xend = float(x_now_arr[-1])
                 yend = float(y_arr[-1])
+                ny   = float(np.clip(nudged[i],
+                                     cur_ylim[0] + ylim_span * 0.02,
+                                     cur_ylim[1] - ylim_span * 0.02))
 
-                tip_halos[i].set_data([xend], [yend])
+                # Layered glow at actual line tip
+                halo_outer[i].set_data([xend], [yend])
+                halo_inner[i].set_data([xend], [yend])
                 tip_dots[i].set_data([xend], [yend])
 
-                glow_ims[i].set_extent([xend-gdx/2, xend+gdx/2,
-                                        yend-gdy/2, yend+gdy/2])
-                icon_ims[i].set_extent([xend+dx*0.2, xend+dx*1.2,
-                                        yend-dy/2, yend+dy/2])
+                # Convert tip to display px, offset icon to the right
+                try:
+                    tx, ty = _data_to_disp(xend, ny)
+                    ix, _  = _disp_to_data(tx + DOT_TO_ICON, ty)
+                    lx, _  = _disp_to_data(tx + DOT_TO_ICON + ICON_TO_LBL, ty)
+                except Exception:
+                    ix, lx = xend, xend
 
-                ny = float(np.clip(nudged[i],
-                                   cur_ylim[0]+dy*0.6,
-                                   cur_ylim[1]-dy*0.6))
-                val_labels[i].set_position((xend + dx*1.4, ny))
-                val_labels[i].set_text(
-                    f"{col}\n{fmt(float(Y_MAT[f, i]), units)}")
+                icon_boxes[i].xy = (ix, ny)
+                icon_boxes[i].set_visible(True)
+
+                val_labels[i].set_position((lx, ny))
+                val_labels[i].set_text(f"{col}\n{fmt(float(Y_MAT[f, i]), units)}")
             else:
-                tip_halos[i].set_data([], [])
+                halo_outer[i].set_data([], [])
+                halo_inner[i].set_data([], [])
                 tip_dots[i].set_data([], [])
-                glow_ims[i].set_extent([-99,-98,ylim_lo,ylim_lo+1])
-                icon_ims[i].set_extent([-99,-98,ylim_lo,ylim_lo+1])
+                icon_boxes[i].set_visible(False)
                 val_labels[i].set_text("")
 
         period_txt.set_text(_format_period_label(idx_labels[p_idx]))
@@ -649,6 +692,8 @@ def create_bar_race_video(
     steps_per_period = max(2, int(total_duration_secs * FPS / max(n_periods-1, 1)))
     total_frames     = (n_periods-1) * steps_per_period + 1
 
+    from matplotlib.offsetbox import AnnotationBbox, OffsetImage
+
     x_raw   = np.arange(n_periods, dtype=float)
     x_dense = np.linspace(0, n_periods-1, total_frames)
 
@@ -658,90 +703,113 @@ def create_bar_race_video(
         cs       = CubicSpline(x_raw, raw_vals)
         y_interp[col] = np.clip(cs(x_dense), 0.0, raw_vals.max() * 1.05)
 
-    Y_MAT    = np.column_stack([y_interp[c] for c in cols])
-    x_max    = float(Y_MAT.max()) * 1.08 or 1.0
+    Y_MAT  = np.column_stack([y_interp[c] for c in cols])
+    x_max  = float(Y_MAT.max()) * 1.08 or 1.0
+    BAR_H  = 0.30    # thin, sharp bars
+    LERP   = 0.14    # per-frame interpolation speed for rank transitions
+    # Icon display size (display points) — sits centred on the bar
+    ICON_DP_B = 20
+    ICON_ZM_B = ICON_DP_B / 48.0
 
     unit_desc = units.get("description", "")
     fig, ax, period_txt = _make_figure(chart_title, unit_desc)
 
-    # Bar chart specific axis setup
-    ax.spines["left"].set_visible(False)
-    ax.spines["bottom"].set_visible(False)
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-    ax.set_xlim(0, x_max)
-    ax.set_ylim(-0.7, n_bars - 0.3)
-    ax.invert_yaxis()
+    # All spines off; we draw a thin baseline at x=0 ourselves
+    for sp in ax.spines.values():
+        sp.set_visible(False)
     ax.set_yticks([])
     ax.xaxis.set_visible(False)
 
-    # Bar width for pillow-look (tall bar height)
-    BAR_H = 0.55
+    # x range: include a left label strip (negative x = label area)
+    LABEL_STRIP = x_max * 0.30   # data units reserved on the left for labels
+    ax.set_xlim(-LABEL_STRIP, x_max * 1.04)
+    ax.set_ylim(-0.65, n_bars - 0.35)
+    ax.invert_yaxis()   # rank-0 (highest) at the top
 
-    # Draw bars (will be updated each frame via set_width)
-    bar_patches = []
-    for i in range(n_bars):
-        p = mpatches.FancyBboxPatch(
-            (0, i - BAR_H/2), 0.001, BAR_H,
-            boxstyle="round,pad=0.0", linewidth=0,
-            facecolor=colors[i], zorder=4,
-        )
-        ax.add_patch(p)
-        bar_patches.append(p)
+    # Thin baseline
+    ax.axvline(x=0, color="#333333", linewidth=0.6, zorder=1)
 
-    # Glow strip behind each bar
-    glow_patches = []
-    for i in range(n_bars):
-        g = mpatches.FancyBboxPatch(
-            (0, i - BAR_H*0.85), 0.001, BAR_H*1.7,
-            boxstyle="round,pad=0.0", linewidth=0,
-            facecolor=colors[i], alpha=0.12, zorder=3,
-        )
-        ax.add_patch(g)
-        glow_patches.append(g)
+    # ── Initial ranking (sort descending by first-frame value) ─────────────────
+    init_vals    = {col: float(Y_MAT[0, i]) for i, col in enumerate(cols)}
+    sorted_init  = sorted(cols, key=lambda c: -init_vals[c])
+    # bar_ypos[col] = current animated y position (rank 0 = top due to invert)
+    bar_ypos     = {col: float(r) for r, col in enumerate(sorted_init)}
 
-    # Icon images on left (fixed y-position per bar)
-    ICON_SIZE_FRAC = 0.55   # fraction of bar spacing in data coords
-    icon_ims_bar   = []
-    ax_w_px = (_AX_R - _AX_L) * FIG_W * DPI
-    ax_h_px = (_AX_T - _AX_B) * FIG_H * DPI
-
-    for i in range(n_bars):
-        im = ax.imshow(icon_arrays[i],
-                       extent=[-x_max*0.13, -x_max*0.01,
-                                i - ICON_SIZE_FRAC/2, i + ICON_SIZE_FRAC/2],
-                       zorder=10, clip_on=False, aspect="auto",
-                       interpolation="bilinear")
-        icon_ims_bar.append(im)
-
-    # Series name labels (to the left of icons)
-    name_labels = []
+    # ── Bar patches (plain Rectangle — sharp edges) ────────────────────────────
+    bar_patches: list[mpatches.Rectangle] = []
     for i, col in enumerate(cols):
-        lbl = ax.text(-x_max * 0.15, i, col,
-                      color=colors[i], fontsize=9, fontweight="bold",
-                      va="center", ha="right", zorder=12, clip_on=False)
+        y0 = bar_ypos[col]
+        rect = mpatches.Rectangle(
+            (0, y0 - BAR_H / 2), 0.001, BAR_H,
+            linewidth=0, facecolor=colors[i], zorder=4,
+        )
+        ax.add_patch(rect)
+        bar_patches.append(rect)
+
+    # ── Icons (AnnotationBbox) — centred on bar, inside the label strip ────────
+    icon_boxes_b: list[AnnotationBbox] = []
+    for i, col in enumerate(cols):
+        y0  = bar_ypos[col]
+        iim = OffsetImage(icon_arrays[i], zoom=ICON_ZM_B, interpolation="lanczos")
+        iab = AnnotationBbox(
+            iim, (-LABEL_STRIP * 0.18, y0),
+            xycoords="data",
+            box_alignment=(0.5, 0.5),
+            frameon=False, zorder=10, clip_on=False,
+        )
+        ax.add_artist(iab)
+        icon_boxes_b.append(iab)
+
+    # ── Name labels (left of icon) ─────────────────────────────────────────────
+    name_labels: list = []
+    for i, col in enumerate(cols):
+        y0  = bar_ypos[col]
+        lbl = ax.text(
+            -LABEL_STRIP * 0.33, y0, col,
+            color=colors[i], fontsize=8.5, fontweight="bold",
+            va="center", ha="right", zorder=12, clip_on=False,
+        )
         name_labels.append(lbl)
 
-    # Value labels at bar tip
-    val_labels = []
+    # ── Value labels at right tip of each bar ─────────────────────────────────
+    val_labels: list = []
     for i in range(n_bars):
-        lbl = ax.text(0.001, i, "",
-                      color="#FFFFFF", fontsize=9, fontweight="bold",
-                      va="center", ha="left", zorder=12, clip_on=False)
+        y0  = list(bar_ypos.values())[i]
+        lbl = ax.text(
+            0.001, y0, "",
+            color="#FFFFFF", fontsize=8.5, fontweight="bold",
+            va="center", ha="left", zorder=12, clip_on=False,
+        )
         val_labels.append(lbl)
 
     def update_bar(frame: int):
         f     = min(frame, total_frames-1)
         p_idx = int(np.clip(round(x_dense[f]), 0, n_periods-1))
 
-        cur_vals = [float(Y_MAT[f, i]) for i in range(n_bars)]
-        cur_max  = max(max(cur_vals), x_max * 0.01)
+        # Current interpolated values
+        cur_vals = {col: float(Y_MAT[f, ci]) for ci, col in enumerate(cols)}
 
-        for i in range(n_bars):
-            v = cur_vals[i]
-            bar_patches[i].set_width(max(v, 0.001))
-            glow_patches[i].set_width(max(v, 0.001))
-            val_labels[i].set_x(v + x_max * 0.01)
+        # Target ranking: highest value → rank 0 (top)
+        sorted_cols  = sorted(cols, key=lambda c: -cur_vals[c])
+        target_ranks = {col: float(r) for r, col in enumerate(sorted_cols)}
+
+        # Smooth position lerp — gradual overtake animation
+        for col in cols:
+            bar_ypos[col] += (target_ranks[col] - bar_ypos[col]) * LERP
+
+        # Update each bar, icon, and label using the lerped position
+        for i, col in enumerate(cols):
+            y  = bar_ypos[col]
+            v  = cur_vals[col]
+            vw = max(v, 0.001)
+
+            bar_patches[i].set_y(y - BAR_H / 2)
+            bar_patches[i].set_width(vw)
+
+            icon_boxes_b[i].xy = (-LABEL_STRIP * 0.18, y)
+            name_labels[i].set_y(y)
+            val_labels[i].set_y(y)
+            val_labels[i].set_x(v + x_max * 0.012)
             val_labels[i].set_text(fmt(v, units))
 
         period_txt.set_text(_format_period_label(idx_labels[p_idx]))
