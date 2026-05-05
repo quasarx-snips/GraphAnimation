@@ -113,9 +113,86 @@ def _make_glow(color_hex: str, size: int = 64) -> np.ndarray:
     img[..., 0] = rv; img[..., 1] = gv; img[..., 2] = bv; img[..., 3] = alpha
     return (img * 255).astype(np.uint8)
 
+# ── Emoji icon system ─────────────────────────────────────────────────────────
+EMOJI_MAP: dict[str, str] = {
+    # Country flags
+    "usa": "🇺🇸", "united states": "🇺🇸", "us": "🇺🇸", "america": "🇺🇸",
+    "china": "🇨🇳", "prc": "🇨🇳",
+    "uk": "🇬🇧", "united kingdom": "🇬🇧", "britain": "🇬🇧",
+    "germany": "🇩🇪",  "japan": "🇯🇵",  "india": "🇮🇳",
+    "russia": "🇷🇺",   "france": "🇫🇷",  "brazil": "🇧🇷",
+    "canada": "🇨🇦",   "australia": "🇦🇺",
+    "south korea": "🇰🇷", "korea": "🇰🇷", "north korea": "🇰🇵",
+    "mexico": "🇲🇽",   "italy": "🇮🇹",   "spain": "🇪🇸",
+    "indonesia": "🇮🇩", "turkey": "🇹🇷", "saudi arabia": "🇸🇦", "saudi": "🇸🇦",
+    "netherlands": "🇳🇱", "europe": "🇪🇺", "eu": "🇪🇺",
+    "ukraine": "🇺🇦",  "pakistan": "🇵🇰", "nigeria": "🇳🇬",
+    "south africa": "🇿🇦", "egypt": "🇪🇬", "iran": "🇮🇷", "israel": "🇮🇱",
+    "sweden": "🇸🇪",   "norway": "🇳🇴",   "denmark": "🇩🇰",
+    "finland": "🇫🇮",  "poland": "🇵🇱",   "argentina": "🇦🇷",
+    "chile": "🇨🇱",    "colombia": "🇨🇴",  "vietnam": "🇻🇳",
+    "thailand": "🇹🇭", "malaysia": "🇲🇾",  "philippines": "🇵🇭",
+    "taiwan": "🇹🇼",   "singapore": "🇸🇬",
+    # Tech / companies
+    "apple": "🍎",     "google": "🔍",    "meta": "🔵", "facebook": "🔵",
+    "amazon": "📦",    "microsoft": "🪟", "tesla": "⚡", "netflix": "🎬",
+    "tiktok": "🎵",    "youtube": "▶️",   "spotify": "🎧", "uber": "🚗",
+    "twitter": "🐦",   "openai": "🤖",    "nvidia": "🖥️", "samsung": "📱",
+    # Energy
+    "solar": "☀️",    "wind": "💨",      "nuclear": "⚛️", "coal": "🏭",
+    "oil": "🛢️",      "gas": "💧",       "renewable": "♻️", "fossil": "🛢️",
+    "hydro": "🌊",
+    # Finance / economy
+    "gdp": "💰",       "bitcoin": "₿",    "crypto": "💎", "gold": "🥇",
+    "silver": "🥈",    "inflation": "📉", "debt": "💸",
+    # Transport
+    "ev": "🔋",        "electric": "⚡",  "car": "🚗",
+    "plane": "✈️",     "train": "🚄",     "ship": "🚢",
+    # Environment
+    "co2": "🌡️",      "carbon": "🌿",    "emission": "🌫️", "forest": "🌳",
+    # Society
+    "population": "👥", "military": "⚔️", "tank": "🛡️",
+    "education": "🎓", "health": "🏥",    "food": "🍽️", "water": "💧",
+    "africa": "🌍",    "asia": "🌏",
+}
+
+def _emoji_codepoints(ch: str) -> str:
+    """Emoji → twemoji filename (skip variation selector U+FE0F, handle ZWJ)."""
+    pts = [f"{ord(c):x}" for c in ch if ord(c) != 0xFE0F]
+    return "-".join(pts)
+
+def _match_emoji(label: str) -> str | None:
+    """Longest keyword match for a series label."""
+    lower = label.lower().strip()
+    if lower in EMOJI_MAP:
+        return EMOJI_MAP[lower]
+    for key in sorted(EMOJI_MAP, key=len, reverse=True):
+        if key in lower:
+            return EMOJI_MAP[key]
+    return None
+
+def _emoji_image(emoji_char: str, color_hex: str, size: int = 48) -> np.ndarray:
+    """Fetch emoji PNG from Twemoji CDN → circular RGBA. Falls back to initials."""
+    try:
+        pts = _emoji_codepoints(emoji_char)
+        url = f"https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/{pts}.png"
+        r = requests.get(url, timeout=5)
+        if r.status_code == 200:
+            return _to_circle(Image.open(io.BytesIO(r.content)).convert("RGBA"), size)
+    except Exception:
+        pass
+    return _initials(color_hex, emoji_char[0] if emoji_char else "?", size)
+
+def _fast_icon(label: str, color: str, size: int = 48) -> np.ndarray:
+    """No-LLM icon: emoji match → twemoji CDN → initials."""
+    em = _match_emoji(label)
+    if em:
+        return _emoji_image(em, color, size)
+    return _initials(color, label, size)
+
 def _flag(code: str, size: int = 48) -> np.ndarray | None:
     try:
-        r = requests.get(f"https://flagcdn.com/48x36/{code.lower()}.png", timeout=6)
+        r = requests.get(f"https://flagcdn.com/48x36/{code.lower()}.png", timeout=5)
         if r.status_code == 200:
             return _to_circle(Image.open(io.BytesIO(r.content)), size)
     except Exception:
@@ -125,7 +202,7 @@ def _flag(code: str, size: int = 48) -> np.ndarray | None:
 def _identify_countries(cols: list[str]) -> dict[str, str | None]:
     try:
         resp = client.chat.completions.create(
-            model="gpt-5.1",
+            model="gpt-4.1",
             messages=[{"role": "user", "content": (
                 f"For each name {cols}, if it is a country return ISO 3166-1 alpha-2 "
                 "code (lowercase), else null. ONLY JSON. "
@@ -151,9 +228,20 @@ def get_icons(cols: list[str], colors: list[str],
                 continue
             except Exception:
                 pass
+        # 1. Country flag
         code = cmap.get(col)
-        icon = _flag(code, size) if code else None
-        out.append(icon if icon is not None else _initials(colors[i], col, size))
+        if code:
+            flag_img = _flag(code, size)
+            if flag_img is not None:
+                out.append(flag_img)
+                continue
+        # 2. Emoji keyword match via Twemoji CDN
+        em = _match_emoji(col)
+        if em:
+            out.append(_emoji_image(em, colors[i], size))
+            continue
+        # 3. Initials fallback
+        out.append(_initials(colors[i], col, size))
     return out
 
 # ── Date index helpers ─────────────────────────────────────────────────────────
@@ -195,20 +283,30 @@ def _clean_df(df: pd.DataFrame) -> pd.DataFrame:
     df.columns = [_clean_col_name(c) for c in df.columns]
     return df
 
+CURRENT_YEAR = 2026
+
 def extract_data_from_llm(topic: str) -> tuple[pd.DataFrame, str]:
     resp = client.chat.completions.create(
-        model="gpt-5.1",
+        model="gpt-4.1",
         messages=[
-            {"role": "system", "content": "Return ONLY clean CSV. No markdown."},
+            {"role": "system", "content": (
+                f"The current year is {CURRENT_YEAR}. Return ONLY clean CSV. No markdown. "
+                "Use only verified, realistic data based on authoritative sources "
+                "(World Bank, IMF, UN, official government statistics). "
+                "Do NOT fabricate or extrapolate wildly — use best-known figures. "
+                f"If the topic mentions 'current' or 'recent', use data up to {CURRENT_YEAR}."
+            )},
             {"role": "user", "content": (
                 f'Topic: "{topic}"\n'
+                f"Current year: {CURRENT_YEAR}\n"
                 "Rules:\n"
                 "- First column = time index. For annual data use integer years. "
-                "For monthly data use YYYY-MM-DD format (1st of each month). "
-                "For daily data use YYYY-MM-DD format.\n"
+                "For monthly use YYYY-MM-DD (1st of month). "
                 "- 2–6 category columns, short noun-only names (e.g. 'India' not 'India_pop')\n"
-                "- Raw numeric values only, 15–30 rows, realistic trends.\n"
-                "Return ONLY CSV, no markdown."
+                "- Raw numeric values only. 15–30 rows covering a meaningful time span.\n"
+                "- Values must be realistic and consistent with known statistics.\n"
+                f"- If topic ends at 'present' or 'now', include data through {CURRENT_YEAR}.\n"
+                "Return ONLY CSV, no markdown, no explanation."
             )},
         ],
         max_completion_tokens=4000,
@@ -218,7 +316,7 @@ def extract_data_from_llm(topic: str) -> tuple[pd.DataFrame, str]:
     df      = pd.read_csv(io.StringIO(cleaned))
     df      = _clean_df(df)
     t = client.chat.completions.create(
-        model="gpt-5.1",
+        model="gpt-4.1",
         messages=[{"role": "user", "content":
                    f"Short chart title (≤7 words, title case) for: {topic}. Return only the title."}],
         max_completion_tokens=30,
@@ -526,8 +624,8 @@ def create_line_race_video(
 
     zoom_frames   = 0 if use_log else min(int(3.0 * FPS), total_frames // 3)
     xlim_lo       = -0.35
-    xlim_hi_max   = n_periods - 0.65
-    ELASTIC_AHEAD = 1.65
+    xlim_hi_max   = n_periods + 2.0    # extra room so labels sit tight to dots
+    ELASTIC_AHEAD = 2.2
 
     # Icon on the leading dot — centered on tip, large enough to show flags
     ICON_DP     = 26   # display-point diameter (keeps dot size same, icon is overlay)
@@ -844,6 +942,237 @@ def create_bar_race_video(
 
     return raw_path
 
+# ── Animated Pie chart ────────────────────────────────────────────────────────
+def create_pie_race_video(
+    df: pd.DataFrame,
+    idx_labels: list[str],
+    chart_title: str,
+    units: dict,
+    total_duration_secs: float,
+    raw_path: str,
+    colors: list[str] | None = None,
+) -> str:
+    import matplotlib.patches as mpatch
+
+    n_periods = len(df)
+    n_slices  = min(len(df.columns), 8)
+    df        = df.iloc[:, :n_slices].copy()
+    cols      = list(df.columns)
+    pie_colors = (colors or DEFAULT_COLORS)[:n_slices]
+
+    steps_per_period = max(2, int(total_duration_secs * FPS / max(n_periods - 1, 1)))
+    total_frames     = (n_periods - 1) * steps_per_period + 1
+    x_dense = _make_eased_x_dense(n_periods, steps_per_period)
+
+    x_raw = np.arange(n_periods, dtype=float)
+    y_interp: dict[str, np.ndarray] = {}
+    for col in cols:
+        raw_vals = df[col].values.astype(float)
+        cs = CubicSpline(x_raw, raw_vals)
+        y_interp[col] = np.clip(cs(x_dense), 0.0, raw_vals.max() * 1.05)
+    Y_MAT = np.column_stack([y_interp[c] for c in cols])
+
+    unit_desc = units.get("description", "")
+    plt.rcParams.update({"font.family": "DejaVu Sans"})
+    fig = plt.figure(figsize=(FIG_W, FIG_H), facecolor=BG, dpi=DPI)
+    fig.text(0.50, 0.977, BRAND, ha="center", va="top",
+             fontsize=8, color="#3A3A3A", fontstyle="italic")
+    fig.text(_AX_L, 0.962, chart_title, ha="left", va="top",
+             fontsize=18, fontweight="bold", color="#FFFFFF")
+    subtitle_y = 0.920
+    if unit_desc:
+        fig.text(_AX_L, subtitle_y, unit_desc, ha="left", va="top",
+                 fontsize=10, color="#888888")
+        subtitle_y = 0.900
+    fig.text(_AX_L, subtitle_y - 0.004, "v Read caption for more",
+             ha="left", va="top", fontsize=9, color="#FF6B35", fontstyle="italic")
+    period_txt = fig.text(0.50, 0.090, "", ha="center", va="center",
+                          fontsize=36, fontweight="bold", color="#FFFFFF")
+    ax_pie = fig.add_axes([0.08, 0.18, 0.84, 0.66])
+    ax_pie.set_facecolor(BG)
+    ax_pie.set_xlim(-1.45, 1.45); ax_pie.set_ylim(-1.45, 1.45)
+    ax_pie.set_aspect("equal"); ax_pie.axis("off")
+
+    DONUT = n_slices > 4   # donut for many slices, full pie for few
+
+    def update_pie(frame: int):
+        f     = min(frame, total_frames - 1)
+        p_idx = int(np.clip(round(x_dense[f]), 0, n_periods - 1))
+        ax_pie.clear()
+        ax_pie.set_facecolor(BG)
+        ax_pie.set_xlim(-1.45, 1.45); ax_pie.set_ylim(-1.45, 1.45)
+        ax_pie.set_aspect("equal"); ax_pie.axis("off")
+
+        cur_vals = [max(1e-10, float(Y_MAT[f, i])) for i in range(n_slices)]
+        total    = sum(cur_vals)
+        start    = 90.0
+        width    = 0.45 if DONUT else 0.82
+
+        for i in range(n_slices):
+            pct   = cur_vals[i] / total
+            sweep = pct * 360.0
+            w = mpatch.Wedge(
+                (0, 0), 0.82, start - sweep, start,
+                width=width, facecolor=pie_colors[i],
+                edgecolor=BG, linewidth=3, zorder=5,
+            )
+            ax_pie.add_patch(w)
+            if pct > 0.03:
+                mid_ang = np.radians(start - sweep / 2)
+                r_lbl   = 0.88 if DONUT else 0.55
+                lx = np.cos(mid_ang) * r_lbl
+                ly = np.sin(mid_ang) * r_lbl
+                pct_str = f"{pct * 100:.1f}%"
+                ax_pie.text(lx, ly, f"{cols[i][:9]}\n{pct_str}",
+                            ha="center", va="center", color="#FFFFFF",
+                            fontsize=6.5 if n_slices > 4 else 8,
+                            fontweight="bold", clip_on=False, zorder=10)
+            start -= sweep
+
+        # Legend strip
+        for i, col in enumerate(cols):
+            fig.text(
+                0.13 + (i % 4) * 0.21, 0.155 - (i // 4) * 0.022,
+                f"■ {col[:12]}", fontsize=7, color=pie_colors[i],
+                ha="left", va="top",
+            )
+        period_txt.set_text(_format_period_label(idx_labels[p_idx]))
+
+    try:
+        ani = mpl_animation.FuncAnimation(
+            fig, update_pie, frames=total_frames, interval=1000 / FPS, blit=False,
+        )
+        writer = mpl_animation.FFMpegWriter(
+            fps=FPS, codec="libx264",
+            extra_args=["-pix_fmt", "yuv420p", "-preset", "fast", "-crf", "17",
+                        "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2"],
+        )
+        ani.save(raw_path, writer=writer, dpi=DPI, savefig_kwargs={"facecolor": BG})
+    except Exception as exc:
+        raise RenderingError(f"Pie animation export failed: {exc}") from exc
+    finally:
+        plt.close(fig)
+    return raw_path
+
+
+# ── Animated Radar / Spider chart ──────────────────────────────────────────────
+def create_radar_race_video(
+    df: pd.DataFrame,
+    idx_labels: list[str],
+    chart_title: str,
+    units: dict,
+    total_duration_secs: float,
+    raw_path: str,
+    colors: list[str] | None = None,
+) -> str:
+    n_periods = len(df)
+    n_spokes  = min(len(df.columns), 8)
+    df        = df.iloc[:, :n_spokes].copy()
+    cols      = list(df.columns)
+    spk_colors = (colors or DEFAULT_COLORS)[:n_spokes]
+
+    steps_per_period = max(2, int(total_duration_secs * FPS / max(n_periods - 1, 1)))
+    total_frames     = (n_periods - 1) * steps_per_period + 1
+    x_dense = _make_eased_x_dense(n_periods, steps_per_period)
+
+    x_raw = np.arange(n_periods, dtype=float)
+    y_interp: dict[str, np.ndarray] = {}
+    for col in cols:
+        raw_vals = df[col].values.astype(float)
+        cs = CubicSpline(x_raw, raw_vals)
+        y_interp[col] = np.clip(cs(x_dense), 0.0, raw_vals.max() * 1.05)
+    Y_MAT = np.column_stack([y_interp[c] for c in cols])
+
+    # Per-column max for normalisation
+    col_maxes = np.array([float(df[c].max()) for c in cols])
+    col_maxes = np.where(col_maxes == 0, 1.0, col_maxes)
+
+    angles = np.linspace(0, 2 * np.pi, n_spokes, endpoint=False)
+    angles_closed = np.append(angles, angles[0])
+
+    unit_desc = units.get("description", "")
+    plt.rcParams.update({"font.family": "DejaVu Sans"})
+    fig = plt.figure(figsize=(FIG_W, FIG_H), facecolor=BG, dpi=DPI)
+    fig.text(0.50, 0.977, BRAND, ha="center", va="top",
+             fontsize=8, color="#3A3A3A", fontstyle="italic")
+    fig.text(_AX_L, 0.962, chart_title, ha="left", va="top",
+             fontsize=18, fontweight="bold", color="#FFFFFF")
+    subtitle_y = 0.920
+    if unit_desc:
+        fig.text(_AX_L, subtitle_y, unit_desc, ha="left", va="top",
+                 fontsize=10, color="#888888")
+        subtitle_y = 0.900
+    fig.text(_AX_L, subtitle_y - 0.004, "v Read caption for more",
+             ha="left", va="top", fontsize=9, color="#FF6B35", fontstyle="italic")
+    period_txt = fig.text(0.50, 0.090, "", ha="center", va="center",
+                          fontsize=36, fontweight="bold", color="#FFFFFF")
+    ax_r = fig.add_axes([0.08, 0.18, 0.84, 0.66])
+    ax_r.set_facecolor(BG)
+    ax_r.set_xlim(-1.5, 1.5); ax_r.set_ylim(-1.5, 1.5)
+    ax_r.set_aspect("equal"); ax_r.axis("off")
+
+    # Grid rings (static)
+    ring_th = np.linspace(0, 2 * np.pi, 120)
+    for r_frac in [0.25, 0.50, 0.75, 1.0]:
+        ax_r.plot(np.cos(ring_th) * r_frac, np.sin(ring_th) * r_frac,
+                  color="#1E1E1E", linewidth=0.6, zorder=1)
+    for ang in angles:
+        ax_r.plot([0, np.cos(ang)], [0, np.sin(ang)],
+                  color="#1E1E1E", linewidth=0.6, zorder=1)
+
+    # Spoke labels (static)
+    for i, (col, ang) in enumerate(zip(cols, angles)):
+        lx = np.cos(ang) * 1.22
+        ly = np.sin(ang) * 1.22
+        ax_r.text(lx, ly, col[:10], ha="center", va="center",
+                  color=spk_colors[i], fontsize=8, fontweight="bold", clip_on=False)
+
+    poly_line, = ax_r.plot([], [], color="#FFFFFF", linewidth=2.0, zorder=5)
+    poly_fill  = ax_r.fill([], [], color="#FFFFFF", alpha=0.15, zorder=4)[0]
+    dot_scats  = [ax_r.plot([], [], "o", color=spk_colors[i], markersize=7,
+                            zorder=7, clip_on=False)[0] for i in range(n_spokes)]
+    val_txts   = [ax_r.text(0, 0, "", color=spk_colors[i], fontsize=6.5,
+                             fontweight="bold", ha="center", va="center",
+                             clip_on=False, zorder=8) for i in range(n_spokes)]
+
+    def update_radar(frame: int):
+        f     = min(frame, total_frames - 1)
+        p_idx = int(np.clip(round(x_dense[f]), 0, n_periods - 1))
+        cur_vals = np.array([float(Y_MAT[f, i]) for i in range(n_spokes)])
+        norm_vals = np.clip(cur_vals / col_maxes, 0, 1)
+        nv_closed = np.append(norm_vals, norm_vals[0])
+
+        px = nv_closed * np.cos(angles_closed)
+        py = nv_closed * np.sin(angles_closed)
+        poly_line.set_data(px, py)
+        poly_fill.set_xy(np.column_stack([px, py]))
+
+        for i in range(n_spokes):
+            r = norm_vals[i]
+            dot_scats[i].set_data([r * np.cos(angles[i])], [r * np.sin(angles[i])])
+            lx = (r + 0.16) * np.cos(angles[i])
+            ly = (r + 0.16) * np.sin(angles[i])
+            val_txts[i].set_position((lx, ly))
+            val_txts[i].set_text(fmt(cur_vals[i], units))
+        period_txt.set_text(_format_period_label(idx_labels[p_idx]))
+
+    try:
+        ani = mpl_animation.FuncAnimation(
+            fig, update_radar, frames=total_frames, interval=1000 / FPS, blit=False,
+        )
+        writer = mpl_animation.FFMpegWriter(
+            fps=FPS, codec="libx264",
+            extra_args=["-pix_fmt", "yuv420p", "-preset", "fast", "-crf", "17",
+                        "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2"],
+        )
+        ani.save(raw_path, writer=writer, dpi=DPI, savefig_kwargs={"facecolor": BG})
+    except Exception as exc:
+        raise RenderingError(f"Radar animation export failed: {exc}") from exc
+    finally:
+        plt.close(fig)
+    return raw_path
+
+
 # ── Music + post-production ────────────────────────────────────────────────────
 def _download_music(tmp_dir: str) -> str | None:
     for url in MUSIC_URLS:
@@ -897,7 +1226,7 @@ def render_preview_frame(
     cols     = list(df.columns)[:8]
     n_series = len(cols)
     line_colors = (colors or DEFAULT_COLORS)[:n_series]
-    icon_arrs = [_initials(line_colors[i], cols[i], 48) for i in range(n_series)]
+    icon_arrs = [_fast_icon(cols[i], line_colors[i], 48) for i in range(n_series)]
     unit_desc = units.get("description", "")
     first_vals = [float(df[col].iloc[0]) for col in cols]
 
@@ -1299,25 +1628,26 @@ else:
     with left:
         # ── Chart type ───────────────────────────────────────────────────────
         st.markdown("#### ⚙️ Chart Settings")
-        chart_type = st.radio(
-            "Chart type",
-            ["📈  Line Chart Race", "📊  Bar Chart Race"],
-            horizontal=True,
-        )
-        is_bar = "Bar" in chart_type
+        CHART_TYPES = ["📈 Line Race", "📊 Bar Race", "🥧 Pie Race", "🕸️ Spider/Radar"]
+        chart_type = st.radio("Chart type", CHART_TYPES, horizontal=True)
+        is_bar    = chart_type == "📊 Bar Race"
+        is_pie    = chart_type == "🥧 Pie Race"
+        is_radar  = chart_type == "🕸️ Spider/Radar"
+        is_line   = chart_type == "📈 Line Race"
 
-        if is_bar:
-            bar_duration = st.slider("Duration (seconds)", 5, 60, 20, 5)
-            st.caption(f"⏱ {bar_duration}s · {len(pdf)} periods")
-        else:
+        steps = 28; bar_duration = 20   # safe defaults regardless of chart type
+        if is_line:
             steps = st.slider("Frames per period (higher = slower)", 8, 60, 28, 4)
             n_p   = len(pdf)
             est   = (n_p - 1) * steps / FPS
-            st.caption(f"⏱ ≈ {est:.0f}s total · {n_p} periods")
+            st.caption(f"⏱ ~{est:.0f}s · {n_p} periods · ease-in/out")
+        else:
+            bar_duration = st.slider("Duration (seconds)", 5, 60, 20, 5)
+            st.caption(f"⏱ {bar_duration}s · {len(pdf)} periods · ease-in/out")
 
         # ── Re-render preview when chart type changes ─────────────────────────
-        if (st.session_state.get("pending_preview_bytes")
-                and is_bar != st.session_state.get("_preview_is_bar", False)):
+        prev_is_bar = st.session_state.get("_preview_is_bar", False)
+        if (st.session_state.get("pending_preview_bytes") and is_bar != prev_is_bar):
             try:
                 st.session_state["pending_preview_bytes"] = render_preview_frame(
                     pdf,
@@ -1533,6 +1863,18 @@ else:
                         icon_arrays, eff_units, bar_duration, raw_mp4,
                         colors=eff_colors, x_label=x_lbl, y_label=y_lbl,
                     )
+                elif is_pie:
+                    status.info(f"🥧  Rendering pie race — {len(df_use)} periods")
+                    create_pie_race_video(
+                        df_use, idx_labels, chart_title,
+                        eff_units, bar_duration, raw_mp4, colors=eff_colors,
+                    )
+                elif is_radar:
+                    status.info(f"🕸️  Rendering radar race — {len(df_use)} periods")
+                    create_radar_race_video(
+                        df_use, idx_labels, chart_title,
+                        eff_units, bar_duration, raw_mp4, colors=eff_colors,
+                    )
                 else:
                     n_frames = (len(df_use)-1) * steps + 1
                     status.info(f"📈  Rendering line race — {n_frames} frames")
@@ -1563,7 +1905,7 @@ else:
             st.session_state["history"].append({
                 "ts":     datetime.now().strftime("%H:%M:%S"),
                 "title":  chart_title,
-                "type":   "bar" if is_bar else "line",
+                "type":   "bar" if is_bar else ("pie" if is_pie else ("radar" if is_radar else "line")),
                 "rows":   len(df_use),
                 "series": n_lines,
                 "bytes":  len(video_bytes),
@@ -1609,7 +1951,8 @@ if st.session_state["history"]:
         expanded=False
     ):
         for rec in reversed(st.session_state["history"]):
-            icon = "📊" if rec.get("type") == "bar" else "📈"
+            _type_icons = {"bar": "📊", "pie": "🥧", "radar": "🕸️", "line": "📈"}
+            icon = _type_icons.get(rec.get("type", "line"), "📈")
             st.markdown(
                 f"{icon} **{rec['ts']}** — {rec['title']}  "
                 f"·  {rec['rows']} periods · {rec['series']} series  "
@@ -1620,74 +1963,121 @@ if st.session_state["history"]:
 st.divider()
 with st.expander("📦 Batch Generate & Download ZIP", expanded=False):
     st.markdown(
-        "Enter **one topic per line**. Each topic generates a separate Reel "
-        "(line chart). All reels are packaged into a single ZIP for download."
+        "Enter up to **10 topics** (one per line). Choose a chart type for each "
+        "topic. All reels are generated sequentially and packaged as a ZIP."
     )
+
+    # ── Topic entry grid ────────────────────────────────────────────────────
+    BATCH_MAX  = 10
+    BATCH_CHART_OPTS = ["📈 Line", "📊 Bar", "🥧 Pie", "🕸️ Radar"]
+
     batch_topics_raw = st.text_area(
-        "Topics (one per line)",
-        height=140,
+        "Topics — one per line (max 10)",
+        height=180,
         placeholder=(
             "US vs China GDP 2000–2024\n"
             "EV sales by country 2018–2024\n"
-            "Global CO2 by continent 2010–2023"
+            "Global CO2 by continent 2010–2023\n"
+            "Netflix vs YouTube subscribers 2015–2025"
         ),
         key="batch_topics_input",
     )
-    batch_steps = st.slider(
-        "Frames per period", 8, 40, 20, 4, key="batch_steps"
-    )
+
+    # ── Per-topic chart type ─────────────────────────────────────────────────
+    raw_lines = [l.strip() for l in batch_topics_raw.splitlines() if l.strip()][:BATCH_MAX]
+    batch_chart_types: list[str] = []
+
+    if raw_lines:
+        st.markdown("**Chart type per topic:**")
+        type_cols = st.columns(min(len(raw_lines), 5))
+        for i, topic_line in enumerate(raw_lines):
+            with type_cols[i % 5]:
+                chosen = st.selectbox(
+                    label=f"#{i+1}: {topic_line[:22]}…" if len(topic_line) > 22 else f"#{i+1}: {topic_line}",
+                    options=BATCH_CHART_OPTS,
+                    index=0,
+                    key=f"batch_ct_{i}",
+                    label_visibility="visible",
+                )
+                batch_chart_types.append(chosen)
+
+    # ── Duration / frames ────────────────────────────────────────────────────
+    b_col1, b_col2 = st.columns(2)
+    with b_col1:
+        batch_steps = st.slider("Line: frames/period", 8, 40, 20, 4, key="batch_steps")
+    with b_col2:
+        batch_dur   = st.slider("Bar/Pie/Radar: duration (s)", 5, 45, 18, 5, key="batch_dur")
+
     batch_btn = st.button(
         "🚀 Generate Batch ZIP",
         type="primary",
         use_container_width=True,
         key="batch_generate_btn",
+        disabled=len(raw_lines) == 0,
     )
 
     if batch_btn:
         import zipfile
-        topics_list = [t.strip() for t in batch_topics_raw.splitlines() if t.strip()]
-        if not topics_list:
+        if not raw_lines:
             st.warning("Enter at least one topic.")
-        elif len(topics_list) > 10:
-            st.warning("Maximum 10 topics per batch.")
         else:
-            batch_prog  = st.progress(0, text="Starting batch…")
+            batch_prog   = st.progress(0, text="Starting batch…")
             batch_status = st.empty()
-            zip_buf     = io.BytesIO()
-            success_n   = 0
+            zip_buf      = io.BytesIO()
+            success_n    = 0
             errors: list[str] = []
 
             with zipfile.ZipFile(zip_buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-                for idx_b, topic_b in enumerate(topics_list):
-                    pct = int((idx_b / len(topics_list)) * 100)
-                    batch_prog.progress(pct, text=f"[{idx_b+1}/{len(topics_list)}] {topic_b[:50]}…")
-                    batch_status.info(f"Generating: **{topic_b}**")
+                for idx_b, topic_b in enumerate(raw_lines):
+                    ct_b = batch_chart_types[idx_b] if idx_b < len(batch_chart_types) else "📈 Line"
+                    pct  = int(idx_b / len(raw_lines) * 100)
+                    batch_prog.progress(
+                        pct, text=f"[{idx_b+1}/{len(raw_lines)}] {ct_b} — {topic_b[:45]}…"
+                    )
+                    batch_status.info(f"**{ct_b}** — {topic_b}")
                     try:
                         with tempfile.TemporaryDirectory() as tmp_b:
                             df_b, title_b = extract_data_from_llm(topic_b)
                             df_b, labels_b = temporal_resample(df_b)
-                            units_b = detect_units(topic_b, df_b)
-                            cols_b  = list(df_b.columns)[:8]
-                            df_b    = df_b.iloc[:, :len(cols_b)]
+                            units_b  = detect_units(topic_b, df_b)
+                            cols_b   = list(df_b.columns)[:8]
+                            df_b     = df_b.iloc[:, :len(cols_b)]
                             colors_b = DEFAULT_COLORS[:len(cols_b)]
-                            icon_arrays_b = get_icons(cols_b, colors_b, size=48)
 
-                            raw_b  = os.path.join(tmp_b, "race.mp4")
-                            fin_b  = os.path.join(tmp_b, "reel.mp4")
-                            create_line_race_video(
-                                df_b, labels_b, title_b,
-                                icon_arrays_b, units_b, batch_steps, raw_b,
-                                colors=colors_b,
-                            )
+                            raw_b = os.path.join(tmp_b, "race.mp4")
+                            fin_b = os.path.join(tmp_b, "reel.mp4")
+
+                            if "Bar" in ct_b:
+                                icon_b = get_icons(cols_b, colors_b, size=48)
+                                create_bar_race_video(
+                                    df_b, labels_b, title_b,
+                                    icon_b, units_b, batch_dur, raw_b, colors=colors_b,
+                                )
+                            elif "Pie" in ct_b:
+                                create_pie_race_video(
+                                    df_b, labels_b, title_b,
+                                    units_b, batch_dur, raw_b, colors=colors_b,
+                                )
+                            elif "Radar" in ct_b:
+                                create_radar_race_video(
+                                    df_b, labels_b, title_b,
+                                    units_b, batch_dur, raw_b, colors=colors_b,
+                                )
+                            else:  # Line
+                                icon_b = get_icons(cols_b, colors_b, size=48)
+                                create_line_race_video(
+                                    df_b, labels_b, title_b,
+                                    icon_b, units_b, batch_steps, raw_b, colors=colors_b,
+                                )
+
                             post_produce(raw_b, fin_b, tmp_b)
-
-                            safe_name = re.sub(r"[^a-zA-Z0-9_\-]", "_", title_b)[:40]
+                            safe_name = re.sub(r"[^a-zA-Z0-9_\-]", "_", title_b)[:38]
                             arc_name  = f"{idx_b+1:02d}_{safe_name}.mp4"
                             with open(fin_b, "rb") as fh_b:
                                 zf.writestr(arc_name, fh_b.read())
                             success_n += 1
                     except Exception as exc_b:
-                        errors.append(f"{topic_b}: {exc_b}")
+                        errors.append(f"#{idx_b+1} {topic_b[:40]}: {exc_b}")
 
             batch_prog.progress(100, text="Done!")
             zip_buf.seek(0)
@@ -1695,8 +2085,8 @@ with st.expander("📦 Batch Generate & Download ZIP", expanded=False):
 
             if success_n:
                 batch_status.success(
-                    f"✅ {success_n}/{len(topics_list)} reels generated. "
-                    + (f"{len(errors)} failed." if errors else "")
+                    f"✅ {success_n}/{len(raw_lines)} reels ready."
+                    + (f" ({len(errors)} failed)" if errors else "")
                 )
                 st.download_button(
                     label=f"⬇️  Download ZIP  ({success_n} reels · {len(zip_bytes)/1e6:.1f} MB)",
@@ -1710,6 +2100,6 @@ with st.expander("📦 Batch Generate & Download ZIP", expanded=False):
                         for e in errors:
                             st.error(e)
             else:
-                batch_status.error("All topics failed. Check your connection or try simpler topics.")
+                batch_status.error("All topics failed. Check connection or try simpler topics.")
                 for e in errors:
                     st.error(e)
