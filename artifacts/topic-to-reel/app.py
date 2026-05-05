@@ -403,6 +403,18 @@ def avoid_collisions(positions: list[float], min_gap: float,
         result[oi] = float(pos[si])
     return result
 
+# ── Eased time array (ease-in-out per period transition) ──────────────────────
+def _make_eased_x_dense(n_periods: int, steps_per_period: int) -> np.ndarray:
+    """Smoothstep (cubic) ease-in-out applied per period: slow→fast→slow at each data point."""
+    frames: list[float] = []
+    for p in range(n_periods - 1):
+        for s in range(steps_per_period):
+            t   = s / steps_per_period           # 0..1 within this period
+            t_e = t * t * (3.0 - 2.0 * t)       # cubic smoothstep
+            frames.append(float(p) + t_e)
+    frames.append(float(n_periods - 1))
+    return np.array(frames, dtype=float)
+
 # ── Trend indicator ────────────────────────────────────────────────────────────
 def _trend_arrow(cur: float, first: float) -> str:
     if cur > first * 1.001:
@@ -416,7 +428,7 @@ _AX_B = 0.17; _AX_T = 0.83
 _AX_L = 0.13; _AX_R = 0.70
 FIG_W, FIG_H, DPI = 6.75, 12.0, 160
 
-def _make_figure(chart_title: str, subtitle: str, cta_text: str = "👇 Read caption for more") -> tuple:
+def _make_figure(chart_title: str, subtitle: str, cta_text: str = "v Read caption for more") -> tuple:
     plt.rcParams.update({"font.family": "DejaVu Sans"})
     fig = plt.figure(figsize=(FIG_W, FIG_H), facecolor=BG, dpi=DPI)
 
@@ -486,7 +498,7 @@ def create_line_race_video(
 
     total_frames = (n_periods-1) * steps_per_period + 1
     x_raw   = np.arange(n_periods, dtype=float)
-    x_dense = np.linspace(0, n_periods-1, total_frames)
+    x_dense = _make_eased_x_dense(n_periods, steps_per_period)
 
     y_interp: dict[str, np.ndarray] = {}
     for col in cols:
@@ -517,11 +529,11 @@ def create_line_race_video(
     xlim_hi_max   = n_periods - 0.65
     ELASTIC_AHEAD = 1.65
 
-    # Icon on the leading dot — larger and centered on tip
-    ICON_DP     = 20   # display-point diameter of icon circle
+    # Icon on the leading dot — centered on tip, large enough to show flags
+    ICON_DP     = 26   # display-point diameter (keeps dot size same, icon is overlay)
     ICON_ZOOM   = ICON_DP / 48.0
-    # Label offset from dot center
-    LBL_OFFSET  = ICON_DP + 6
+    # Label gap: icon radius + small breathing gap in display pixels
+    LBL_GAP_PX  = ICON_DP / 2 + 7
     LBL_FONT    = 8.5 if n_lines <= 4 else 7.5
 
     unit_desc = units.get("description", "")
@@ -648,20 +660,16 @@ def create_line_race_video(
                 halo_inner[i].set_data([xend], [yend])
                 tip_dots[i].set_data([xend], [yend])
 
-                # Icon centered on the dot tip
+                # Icon centered on the dot tip — no lag behind
                 icon_boxes[i].xy = (xend, yend)
                 icon_boxes[i].set_visible(True)
 
-                # Label offset to the right of the icon
+                # Label offset: right of icon edge in display pixels → data units
                 try:
                     tx_tip, ty_tip = _data_to_disp(xend, yend)
-                    # Offset label by icon radius + gap in display pixels
-                    lx, _ = _disp_to_data(tx_tip + ICON_DP / 2 + LBL_OFFSET, ty_tip)
-                    _, ly_nud = _data_to_disp(xend, ny)
-                    lx_nud, _ = _disp_to_data(tx_tip + ICON_DP / 2 + LBL_OFFSET, ly_nud)
+                    lx_nud, _ = _disp_to_data(tx_tip + LBL_GAP_PX, ty_tip)
                 except Exception:
-                    lx_nud = xend + 0.1
-                    ny_orig = ny
+                    lx_nud = xend + 0.2
 
                 cur_val = float(Y_MAT[f, i])
                 arrow   = _trend_arrow(cur_val, first_vals[i])
@@ -726,7 +734,7 @@ def create_bar_race_video(
     total_frames     = (n_periods-1) * steps_per_period + 1
 
     x_raw   = np.arange(n_periods, dtype=float)
-    x_dense = np.linspace(0, n_periods-1, total_frames)
+    x_dense = _make_eased_x_dense(n_periods, steps_per_period)
 
     y_interp: dict[str, np.ndarray] = {}
     for col in cols:
@@ -945,11 +953,10 @@ def render_preview_frame(
         ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: fmt(v, units)))
         ax.tick_params(axis="y", labelcolor="#555555", labelsize=8, length=3, pad=4,
                        direction="out", width=0.5)
-        ax.set_xlim(-0.35, n - 0.65)
         ax.set_ylim(ylim_lo, ylim_hi)
 
         ylim_span = ylim_hi - ylim_lo
-        P_ICON_DP  = 20
+        P_ICON_DP  = 26
         P_ICON_ZM  = P_ICON_DP / 48.0
         P_LBL_FONT = 8.5 if n_series <= 4 else 7.5
         n_rows_p   = 2 if n_series <= 4 else 1
@@ -957,6 +964,9 @@ def render_preview_frame(
 
         raw_ypos = [float(vals[-1, i]) for i in range(n_series)]
         nudged   = avoid_collisions(raw_ypos, P_MIN_GAP)
+
+        # Extend x-limit to give flags + labels room at right edge (match animation ELASTIC_AHEAD)
+        ax.set_xlim(-0.35, (n - 1) + 2.0)
 
         n_ticks_p  = min(5, n)
         tick_pos_p = ([int(round(j * (n - 1) / (n_ticks_p - 1)))
@@ -967,6 +977,12 @@ def render_preview_frame(
         ax.tick_params(axis="x", length=3, pad=5, direction="out", width=0.5)
 
         cur_ylim  = (ylim_lo, ylim_hi)
+
+        # Compute accurate x data-unit offset: axis_px → data_units
+        ax_width_px   = (_AX_R - _AX_L) * FIG_W * DPI
+        x_data_range  = (n - 1 + 2.0) - (-0.35)
+        data_per_px   = x_data_range / ax_width_px
+        P_LBL_X_OFF   = (P_ICON_DP / 2 + 7) * data_per_px
 
         for i, col in enumerate(cols):
             c    = line_colors[i]
@@ -989,7 +1005,7 @@ def render_preview_frame(
                     markeredgecolor="#FFFFFF", markeredgewidth=1.2,
                     clip_on=False, zorder=9)
 
-            # Icon centered on dot
+            # Flag/icon centered on dot tip
             iab = AnnotationBbox(
                 OffsetImage(icon_arrs[i], zoom=P_ICON_ZM, interpolation="lanczos"),
                 (xend, yend), xycoords="data",
@@ -998,16 +1014,12 @@ def render_preview_frame(
             )
             ax.add_artist(iab)
 
-            # Label to the right of icon
+            # Label tightly to the right of the icon
             arrow   = _trend_arrow(yend, first_vals[i])
             val_s   = fmt(yend, units)
             lbl_txt = f"{col}\n{arrow} {val_s}" if n_series <= 4 else f"{col[:10]}: {arrow} {val_s}"
 
-            # Approximate data-unit offset for label
-            pts_to_data = ylim_span / ((_AX_T - _AX_B) * FIG_H * DPI / 72.0)
-            lbl_x_off   = (P_ICON_DP / 2 + 6) * pts_to_data
-
-            ax.text(xend + lbl_x_off, ny, lbl_txt,
+            ax.text(xend + P_LBL_X_OFF, ny, lbl_txt,
                     color=c, fontsize=P_LBL_FONT, fontweight="bold",
                     va="center", ha="left", clip_on=False,
                     multialignment="left", linespacing=1.25)
@@ -1603,3 +1615,101 @@ if st.session_state["history"]:
                 f"·  {rec['rows']} periods · {rec['series']} series  "
                 f"·  {rec['bytes']/1e6:.1f} MB"
             )
+
+# ── Batch Download ──────────────────────────────────────────────────────────────
+st.divider()
+with st.expander("📦 Batch Generate & Download ZIP", expanded=False):
+    st.markdown(
+        "Enter **one topic per line**. Each topic generates a separate Reel "
+        "(line chart). All reels are packaged into a single ZIP for download."
+    )
+    batch_topics_raw = st.text_area(
+        "Topics (one per line)",
+        height=140,
+        placeholder=(
+            "US vs China GDP 2000–2024\n"
+            "EV sales by country 2018–2024\n"
+            "Global CO2 by continent 2010–2023"
+        ),
+        key="batch_topics_input",
+    )
+    batch_steps = st.slider(
+        "Frames per period", 8, 40, 20, 4, key="batch_steps"
+    )
+    batch_btn = st.button(
+        "🚀 Generate Batch ZIP",
+        type="primary",
+        use_container_width=True,
+        key="batch_generate_btn",
+    )
+
+    if batch_btn:
+        import zipfile
+        topics_list = [t.strip() for t in batch_topics_raw.splitlines() if t.strip()]
+        if not topics_list:
+            st.warning("Enter at least one topic.")
+        elif len(topics_list) > 10:
+            st.warning("Maximum 10 topics per batch.")
+        else:
+            batch_prog  = st.progress(0, text="Starting batch…")
+            batch_status = st.empty()
+            zip_buf     = io.BytesIO()
+            success_n   = 0
+            errors: list[str] = []
+
+            with zipfile.ZipFile(zip_buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                for idx_b, topic_b in enumerate(topics_list):
+                    pct = int((idx_b / len(topics_list)) * 100)
+                    batch_prog.progress(pct, text=f"[{idx_b+1}/{len(topics_list)}] {topic_b[:50]}…")
+                    batch_status.info(f"Generating: **{topic_b}**")
+                    try:
+                        with tempfile.TemporaryDirectory() as tmp_b:
+                            df_b, title_b = extract_data_from_llm(topic_b)
+                            df_b, labels_b = temporal_resample(df_b)
+                            units_b = detect_units(topic_b, df_b)
+                            cols_b  = list(df_b.columns)[:8]
+                            df_b    = df_b.iloc[:, :len(cols_b)]
+                            colors_b = DEFAULT_COLORS[:len(cols_b)]
+                            icon_arrays_b = get_icons(cols_b, colors_b, size=48)
+
+                            raw_b  = os.path.join(tmp_b, "race.mp4")
+                            fin_b  = os.path.join(tmp_b, "reel.mp4")
+                            create_line_race_video(
+                                df_b, labels_b, title_b,
+                                icon_arrays_b, units_b, batch_steps, raw_b,
+                                colors=colors_b,
+                            )
+                            post_produce(raw_b, fin_b, tmp_b)
+
+                            safe_name = re.sub(r"[^a-zA-Z0-9_\-]", "_", title_b)[:40]
+                            arc_name  = f"{idx_b+1:02d}_{safe_name}.mp4"
+                            with open(fin_b, "rb") as fh_b:
+                                zf.writestr(arc_name, fh_b.read())
+                            success_n += 1
+                    except Exception as exc_b:
+                        errors.append(f"{topic_b}: {exc_b}")
+
+            batch_prog.progress(100, text="Done!")
+            zip_buf.seek(0)
+            zip_bytes = zip_buf.read()
+
+            if success_n:
+                batch_status.success(
+                    f"✅ {success_n}/{len(topics_list)} reels generated. "
+                    + (f"{len(errors)} failed." if errors else "")
+                )
+                st.download_button(
+                    label=f"⬇️  Download ZIP  ({success_n} reels · {len(zip_bytes)/1e6:.1f} MB)",
+                    data=zip_bytes,
+                    file_name=f"reels_batch_{int(time.time())}.zip",
+                    mime="application/zip",
+                    use_container_width=True,
+                )
+                if errors:
+                    with st.expander("Failed topics"):
+                        for e in errors:
+                            st.error(e)
+            else:
+                batch_status.error("All topics failed. Check your connection or try simpler topics.")
+                for e in errors:
+                    st.error(e)
