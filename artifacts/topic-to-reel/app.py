@@ -31,7 +31,7 @@ client = OpenAI(
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 FONT_BOLD = "/run/current-system/sw/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-LINE_COLORS = [
+DEFAULT_COLORS = [
     "#FF6B35", "#4FC3F7", "#69F0AE", "#FFD740",
     "#E040FB", "#FF7043", "#40C4FF", "#B9F6CA",
 ]
@@ -39,19 +39,19 @@ MUSIC_URLS = [
     "https://cdn.pixabay.com/download/audio/2021/09/23/audio_57bc8dcb4e.mp3",
     "https://cdn.pixabay.com/download/audio/2022/10/25/audio_d0bba6d4e2.mp3",
 ]
-REDDIT_UA  = {"User-Agent": "TopicToReel/1.0"}
+REDDIT_UA  = {"User-Agent": "TopicToReel/1.0 (by /u/topictoreelbot)"}
 BRAND      = "worldstats.visualised"
 BG         = "#000000"
 FPS        = 30
 
 FALLBACK_TOPICS = [
-    "US vs China GDP 1980–2024",
-    "Global CO₂ by continent 1990–2023",
-    "EV sales by country 2015–2024",
-    "Netflix vs YouTube vs TikTok subscribers 2015–2024",
-    "iPhone vs Android market share 2010–2024",
-    "Global renewable vs fossil energy 2000–2023",
-    "Top social media platforms by users 2012–2024",
+    "US vs China GDP 2000–2024",
+    "Global CO₂ by continent 2000–2023",
+    "EV sales by country 2018–2024",
+    "Netflix vs YouTube vs TikTok subscribers 2018–2024",
+    "iPhone vs Android market share 2015–2024",
+    "Global renewable vs fossil energy 2010–2024",
+    "Top social media platforms by users 2015–2024",
     "India vs USA vs China population 2000–2024",
 ]
 
@@ -158,7 +158,6 @@ def get_icons(cols: list[str], colors: list[str],
 
 # ── Date index helpers ─────────────────────────────────────────────────────────
 def _try_parse_dates(idx: list) -> tuple[pd.DatetimeIndex, list[str]] | None:
-    """Try to interpret index as dates; return (dates, display_labels) or None."""
     try:
         dates = pd.to_datetime([str(v).strip() for v in idx], infer_datetime_format=True)
         if dates.isnull().any():
@@ -166,18 +165,17 @@ def _try_parse_dates(idx: list) -> tuple[pd.DatetimeIndex, list[str]] | None:
         delta_days = (dates[-1] - dates[0]).days
         if delta_days <= 0:
             return None
-        if delta_days <= 90:      # daily
+        if delta_days <= 90:
             labels = [d.strftime("%-d %b %Y") for d in dates]
-        elif delta_days <= 900:   # monthly
+        elif delta_days <= 900:
             labels = [d.strftime("%b %Y") for d in dates]
-        else:                     # yearly
+        else:
             labels = [str(d.year) for d in dates]
         return dates, labels
     except Exception:
         return None
 
 def _format_period_label(raw_label: str) -> str:
-    """Format a period label nicely for the large counter display."""
     try:
         d = pd.to_datetime(raw_label, infer_datetime_format=True)
         if "day" in raw_label or len(raw_label) > 7:
@@ -273,19 +271,14 @@ def parse_csv_text(csv_text: str, chart_title: str) -> tuple[pd.DataFrame, str]:
 # ── Temporal resampling (date-aware) ──────────────────────────────────────────
 def temporal_resample(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     idx = df.index.tolist()
-
-    # 1. Try date parsing first
     date_result = _try_parse_dates(idx)
     if date_result is not None:
         _, labels = date_result
         return df, labels
-
-    # 2. Numeric fallback
     try:
         nums = [float(str(v).strip()) for v in idx]
     except (ValueError, TypeError):
         return df, [str(v) for v in idx]
-
     delta = nums[-1] - nums[0]
     if delta > 1:
         return df, [str(v) for v in idx]
@@ -316,31 +309,19 @@ def detect_units(topic: str, df: pd.DataFrame) -> dict:
                 f'Column names: {cols}\n'
                 f'Sample values: {json.dumps(sample)}\n\n'
                 'Identify the REAL measurement units for these values.\n'
-                'Return ONLY valid JSON — no markdown, no extra text:\n'
-                '{\n'
-                '  "prefix": "currency symbol if monetary (e.g. $), else empty string",\n'
-                '  "suffix": "unit appended after number (e.g. %, M, km, °C, ships/day), else empty string",\n'
-                '  "description": "short human-readable unit label (e.g. GDP in USD Billions, Market share (%), Ships per day, Population)",\n'
-                '  "is_pct": true if values are already percentages on a 0-100 scale else false\n'
-                '}\n\n'
+                'Return ONLY valid JSON:\n'
+                '{"prefix":"","suffix":"","description":"","is_pct":false}\n'
                 'Examples:\n'
-                '  GDP ($B)     → {"prefix":"$","suffix":"B","description":"GDP (USD Billions)","is_pct":false}\n'
+                '  GDP ($B) → {"prefix":"$","suffix":"B","description":"GDP (USD Billions)","is_pct":false}\n'
                 '  Market share → {"prefix":"","suffix":"%","description":"Market share (%)","is_pct":true}\n'
-                '  Population   → {"prefix":"","suffix":"","description":"Population","is_pct":false}\n'
-                '  Temperature  → {"prefix":"","suffix":"°C","description":"Temperature (°C)","is_pct":false}\n'
-                '  EV sales     → {"prefix":"","suffix":"","description":"Electric vehicles sold","is_pct":false}\n'
-                '  Ships per day→ {"prefix":"","suffix":"","description":"Ships per day","is_pct":false}\n\n'
-                'DO NOT default to USD unless the data is explicitly monetary. Infer from the topic and column names.'
+                '  Population → {"prefix":"","suffix":"","description":"Population","is_pct":false}'
             )}],
             max_completion_tokens=120,
         )
-        raw = resp.choices[0].message.content.strip()
-        raw = raw.strip("```json").strip("```").strip()
+        raw = resp.choices[0].message.content.strip().strip("```json").strip("```").strip()
         u   = json.loads(raw)
-        u.setdefault("prefix", "")
-        u.setdefault("suffix", "")
-        u.setdefault("description", "")
-        u.setdefault("is_pct", False)
+        u.setdefault("prefix", ""); u.setdefault("suffix", "")
+        u.setdefault("description", ""); u.setdefault("is_pct", False)
         return u
     except Exception:
         return {"prefix": "", "suffix": "", "description": "", "is_pct": False}
@@ -349,10 +330,8 @@ def fmt(val: float, u: dict) -> str:
     p, sf   = u.get("prefix", ""), u.get("suffix", "")
     is_pct  = u.get("is_pct", False) or sf.strip() == "%"
     av      = abs(val)
-    # Percentages: never abbreviate, just show 1 decimal
     if is_pct:
         return f"{p}{val:.1f}{sf}"
-    # Large numbers: abbreviate
     if av >= 5e11: return f"{p}{val/1e12:.2f}T{sf}"
     if av >= 5e8:  return f"{p}{val/1e9:.2f}B{sf}"
     if av >= 5e5:  return f"{p}{val/1e6:.2f}M{sf}"
@@ -424,61 +403,63 @@ def avoid_collisions(positions: list[float], min_gap: float,
         result[oi] = float(pos[si])
     return result
 
+# ── Trend indicator ────────────────────────────────────────────────────────────
+def _trend_arrow(cur: float, first: float) -> str:
+    if cur > first * 1.001:
+        return "▲"
+    elif cur < first * 0.999:
+        return "▼"
+    return "●"
+
 # ── Shared figure scaffold ─────────────────────────────────────────────────────
-# Layout constants (figure fractions from bottom):
-#   0.00–0.03  bottom pad
-#   0.03–0.17  period counter (HUGE)
-#   0.17–0.83  chart area  ← taller now
-#   0.83–0.96  title + subtitle block  ← moved up / closer to chart
-#   0.96–1.00  brand
-_AX_B = 0.18; _AX_T = 0.83
+_AX_B = 0.17; _AX_T = 0.83
 _AX_L = 0.13; _AX_R = 0.70
 FIG_W, FIG_H, DPI = 6.75, 12.0, 160
 
-def _make_figure(chart_title: str, subtitle: str) -> tuple:
-    """Create figure with shared layout; return (fig, ax, period_txt)."""
+def _make_figure(chart_title: str, subtitle: str, cta_text: str = "👇 Read caption for more") -> tuple:
     plt.rcParams.update({"font.family": "DejaVu Sans"})
     fig = plt.figure(figsize=(FIG_W, FIG_H), facecolor=BG, dpi=DPI)
 
-    # Brand – very top, tiny, dim
-    fig.text(0.50, 0.975, BRAND, ha="center", va="top",
+    # Brand — very top, tiny, dim
+    fig.text(0.50, 0.977, BRAND, ha="center", va="top",
              fontsize=8, color="#3A3A3A", fontstyle="italic")
 
-    # Title – large bold, left-aligned — pulled down close to chart
-    fig.text(_AX_L, 0.960, chart_title, ha="left", va="top",
-             fontsize=19, fontweight="bold", color="#FFFFFF",
-             wrap=True)
+    # Title — large bold
+    fig.text(_AX_L, 0.962, chart_title, ha="left", va="top",
+             fontsize=18, fontweight="bold", color="#FFFFFF", wrap=True)
 
-    # Subtitle (unit description) – smaller, dimmer
+    # Subtitle (unit description)
+    title_bottom = 0.920
     if subtitle:
-        fig.text(_AX_L, 0.912, subtitle, ha="left", va="top",
+        fig.text(_AX_L, title_bottom, subtitle, ha="left", va="top",
                  fontsize=10, color="#888888")
+        title_bottom = 0.900
+
+    # CTA hook — below subtitle, prominent, acts as a hook line
+    fig.text(_AX_L, title_bottom - 0.004, cta_text, ha="left", va="top",
+             fontsize=9, color="#FF6B35", fontstyle="italic")
 
     # Chart axes
     ax = fig.add_axes([_AX_L, _AX_B, _AX_R - _AX_L, _AX_T - _AX_B])
     ax.set_facecolor(BG)
 
-    # Spines: only left + bottom, rest hidden
+    # Spines: only left + bottom
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
-    ax.spines["left"].set_color("#444444")
+    ax.spines["left"].set_color("#333333")
     ax.spines["left"].set_linewidth(0.8)
-    ax.spines["bottom"].set_color("#444444")
+    ax.spines["bottom"].set_color("#333333")
     ax.spines["bottom"].set_linewidth(0.8)
 
-    # No gridlines
-    ax.grid(False)
+    # Subtle horizontal gridlines
+    ax.yaxis.set_minor_locator(mticker.AutoMinorLocator())
+    ax.grid(axis="y", color="#1A1A1A", linewidth=0.5, linestyle="--", alpha=0.8)
     ax.set_axisbelow(True)
 
-    # Period counter – HUGE, centred below chart
+    # Period counter — HUGE, centred below chart
     period_txt = fig.text(0.50, 0.090, "",
                           ha="center", va="center",
-                          fontsize=34, fontweight="bold", color="#FFFFFF")
-
-    # Persistent CTA — always visible at very bottom of every frame
-    fig.text(0.50, 0.030, "Read caption to know more",
-             ha="center", va="center",
-             fontsize=7.5, color="#4A4A4A", fontstyle="italic")
+                          fontsize=36, fontweight="bold", color="#FFFFFF")
 
     return fig, ax, period_txt
 
@@ -491,13 +472,17 @@ def create_line_race_video(
     units: dict,
     steps_per_period: int,
     raw_path: str,
+    colors: list[str] | None = None,
+    x_label: str = "",
+    y_label: str = "",
 ) -> str:
+    from matplotlib.offsetbox import AnnotationBbox, OffsetImage
+
     n_periods = len(df)
-    n_lines   = min(len(df.columns), len(LINE_COLORS))
+    n_lines   = min(len(df.columns), 8)
     df        = df.iloc[:, :n_lines].copy()
     cols      = list(df.columns)
-    colors    = LINE_COLORS[:n_lines]
-    from matplotlib.offsetbox import AnnotationBbox, OffsetImage
+    line_colors = (colors or DEFAULT_COLORS)[:n_lines]
 
     total_frames = (n_periods-1) * steps_per_period + 1
     x_raw   = np.arange(n_periods, dtype=float)
@@ -512,6 +497,9 @@ def create_line_race_video(
                                 raw_vals.max() * 1.10)
     Y_MAT = np.column_stack([y_interp[c] for c in cols])
 
+    # First-period values for trend arrow
+    first_vals = [float(df[col].iloc[0]) for col in cols]
+
     y_min_data = float(Y_MAT.min())
     y_max_data = float(Y_MAT.max())
     y_range    = max(y_max_data - y_min_data, 1.0)
@@ -524,71 +512,69 @@ def create_line_race_video(
         ylim_lo = y_min_data - y_pad; ylim_hi = y_max_data + y_pad * 2.5
     y_total = ylim_hi - ylim_lo
 
-    zoom_frames = 0 if use_log else min(int(3.0 * FPS), total_frames // 3)
-
+    zoom_frames   = 0 if use_log else min(int(3.0 * FPS), total_frames // 3)
     xlim_lo       = -0.35
     xlim_hi_max   = n_periods - 0.65
     ELASTIC_AHEAD = 1.65
 
-    # Icon display sizes — small and tight, same visual scale as the glow dots
-    ICON_DP      = 13   # icon rendered size in display points (≈ dot size)
-    ICON_ZOOM    = ICON_DP / 48.0   # 48px source → 13pt display
-    # Minimal gap from line-tip dot to left edge of icon
-    DOT_TO_ICON  = 2
-    # Gap from icon right edge to label left edge
-    ICON_TO_LBL  = ICON_DP + 4
-    # Adaptive label font: smaller when many series to reduce clutter
-    LBL_FONT     = 8.0 if n_lines <= 4 else 7.0
+    # Icon on the leading dot — larger and centered on tip
+    ICON_DP     = 20   # display-point diameter of icon circle
+    ICON_ZOOM   = ICON_DP / 48.0
+    # Label offset from dot center
+    LBL_OFFSET  = ICON_DP + 6
+    LBL_FONT    = 8.5 if n_lines <= 4 else 7.5
 
     unit_desc = units.get("description", "")
     fig, ax, period_txt = _make_figure(chart_title, unit_desc)
 
+    if x_label:
+        ax.set_xlabel(x_label, color="#666666", fontsize=9, labelpad=6)
+    if y_label:
+        ax.set_ylabel(y_label, color="#666666", fontsize=9, labelpad=6)
+
     if use_log:
         ax.set_yscale("log")
     ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: fmt(v, units)))
-    ax.tick_params(axis="y", labelcolor="#666666", labelsize=8, length=0, pad=4)
+    ax.tick_params(axis="y", labelcolor="#555555", labelsize=8, length=3, pad=4,
+                   direction="out", width=0.5)
 
-    # Show at most 4 uniformly distributed x-axis tick labels
-    n_ticks  = min(4, n_periods)
+    n_ticks  = min(5, n_periods)
     tick_pos = ([int(round(j * (n_periods - 1) / (n_ticks - 1)))
                  for j in range(n_ticks)] if n_ticks > 1 else [0])
     ax.set_xticks(tick_pos)
     ax.set_xticklabels([idx_labels[i] for i in tick_pos],
-                       color="#666666", fontsize=9, rotation=0)
-    ax.tick_params(axis="x", length=0, pad=5)
+                       color="#555555", fontsize=8.5, rotation=0)
+    ax.tick_params(axis="x", length=3, pad=5, direction="out", width=0.5)
 
     ax.set_xlim(xlim_lo, min(xlim_lo + ELASTIC_AHEAD + 1.0, xlim_hi_max))
     ax.set_ylim(ylim_lo, ylim_hi)
 
-    # Per-series artists
     main_lines  = []
-    halo_outer  = []   # large soft glow ring
-    halo_inner  = []   # medium glow ring
-    tip_dots    = []   # crisp dot at line tip
-    icon_boxes  = []   # AnnotationBbox wrapping flag/initial icon
+    halo_outer  = []
+    halo_inner  = []
+    tip_dots    = []
+    icon_boxes  = []
     val_labels  = []
 
     for i, col in enumerate(cols):
-        c = colors[i]
-        ml, = ax.plot([], [], color=c, linewidth=2.2,
+        c = line_colors[i]
+        ml, = ax.plot([], [], color=c, linewidth=2.5,
                       solid_capstyle="round", zorder=4)
 
-        # Layered glow: outer ring → inner ring → solid dot (deliberately small/tight)
-        ho, = ax.plot([], [], "o", color=c, markersize=13, alpha=0.12,
+        ho, = ax.plot([], [], "o", color=c, markersize=16, alpha=0.10,
                       zorder=6, clip_on=False)
-        hi, = ax.plot([], [], "o", color=c, markersize=8,  alpha=0.28,
+        hi, = ax.plot([], [], "o", color=c, markersize=10, alpha=0.25,
                       zorder=7, clip_on=False)
-        dot,= ax.plot([], [], "o", color=c, markersize=5,
+        dot,= ax.plot([], [], "o", color=c, markersize=6,
                       markerfacecolor=c, markeredgecolor="#FFFFFF",
-                      markeredgewidth=1.0, zorder=9, clip_on=False)
+                      markeredgewidth=1.2, zorder=9, clip_on=False)
 
-        # Icon via AnnotationBbox — pixel-accurate, no data-coord math
+        # Icon CENTERED on the dot tip (box_alignment 0.5,0.5)
         iim = OffsetImage(icon_arrays[i], zoom=ICON_ZOOM, interpolation="lanczos")
         iab = AnnotationBbox(
             iim, (0, 0), xycoords="data",
-            box_alignment=(0, 0.5),   # left-centre aligned at anchor point
-            frameon=False, zorder=10,
-            clip_on=False,
+            box_alignment=(0.5, 0.5),
+            frameon=False, zorder=11, clip_on=False,
         )
         iab.set_visible(False)
         ax.add_artist(iab)
@@ -596,7 +582,7 @@ def create_line_race_video(
         lbl = ax.text(0, 0, "",
                       color=c, fontsize=LBL_FONT, fontweight="bold",
                       va="center", ha="left", zorder=12, clip_on=False,
-                      multialignment="left", linespacing=1.3)
+                      multialignment="left", linespacing=1.25)
 
         main_lines.append(ml)
         halo_outer.append(ho)
@@ -604,9 +590,6 @@ def create_line_race_video(
         tip_dots.append(dot)
         icon_boxes.append(iab)
         val_labels.append(lbl)
-
-    # Cached transform — recalculated when axes limits change
-    _tf_cache: dict = {}
 
     def _data_to_disp(x: float, y: float) -> tuple[float, float]:
         return ax.transData.transform((x, y))
@@ -628,24 +611,21 @@ def create_line_race_video(
             zoom    = 2.0 - t_ease
             center  = float(Y_MAT[f].mean())
             half_h  = y_total / (2.0 * zoom)
-            new_ylo = max(ylim_lo, center - half_h)
-            new_yhi = min(ylim_hi, center + half_h)
-            ax.set_ylim(new_ylo, new_yhi)
+            ax.set_ylim(max(ylim_lo, center - half_h),
+                        min(ylim_hi, center + half_h))
         else:
             if not use_log:
                 ax.set_ylim(ylim_lo, ylim_hi)
 
-        cur_ylim = ax.get_ylim()
+        cur_ylim  = ax.get_ylim()
+        ylim_span = cur_ylim[1] - cur_ylim[0]
 
-        # Compute a "1 data-unit on y" → display-pixels ratio for nudge gap
         try:
             _, y0_px = _data_to_disp(0, cur_ylim[0])
             _, y1_px = _data_to_disp(0, cur_ylim[1])
             px_per_y = abs(y1_px - y0_px)
-            ylim_span = cur_ylim[1] - cur_ylim[0]
-            # Minimum gap = label font height * 1.3 rows in data units
-            font_px      = LBL_FONT * DPI / 72.0 * 1.3  # px per label row
-            n_rows       = 2 if n_lines <= 4 else 1       # two-line vs one-line
+            font_px      = LBL_FONT * DPI / 72.0 * 1.3
+            n_rows       = 2 if n_lines <= 4 else 1
             min_gap_data = font_px * n_rows / px_per_y * ylim_span if px_per_y > 0 else ylim_span * 0.05
         except Exception:
             min_gap_data = (cur_ylim[1] - cur_ylim[0]) * 0.05
@@ -664,32 +644,34 @@ def create_line_race_video(
                                      cur_ylim[0] + ylim_span * 0.02,
                                      cur_ylim[1] - ylim_span * 0.02))
 
-                # Layered glow at actual line tip
                 halo_outer[i].set_data([xend], [yend])
                 halo_inner[i].set_data([xend], [yend])
                 tip_dots[i].set_data([xend], [yend])
 
-                try:
-                    # Icon anchored to ACTUAL line tip (yend) — stays on the trail
-                    tx_tip, ty_tip = _data_to_disp(xend, yend)
-                    ix, _          = _disp_to_data(tx_tip + DOT_TO_ICON, ty_tip)
-                    # Label anchored to NUDGED position (ny) — avoids text collisions
-                    tx_nud, ty_nud = _data_to_disp(xend, ny)
-                    lx, _          = _disp_to_data(tx_nud + DOT_TO_ICON + ICON_TO_LBL, ty_nud)
-                except Exception:
-                    ix, lx = xend, xend
-
-                icon_boxes[i].xy = (ix, yend)
+                # Icon centered on the dot tip
+                icon_boxes[i].xy = (xend, yend)
                 icon_boxes[i].set_visible(True)
 
-                val_str = fmt(float(Y_MAT[f, i]), units)
+                # Label offset to the right of the icon
+                try:
+                    tx_tip, ty_tip = _data_to_disp(xend, yend)
+                    # Offset label by icon radius + gap in display pixels
+                    lx, _ = _disp_to_data(tx_tip + ICON_DP / 2 + LBL_OFFSET, ty_tip)
+                    _, ly_nud = _data_to_disp(xend, ny)
+                    lx_nud, _ = _disp_to_data(tx_tip + ICON_DP / 2 + LBL_OFFSET, ly_nud)
+                except Exception:
+                    lx_nud = xend + 0.1
+                    ny_orig = ny
+
+                cur_val = float(Y_MAT[f, i])
+                arrow   = _trend_arrow(cur_val, first_vals[i])
+                val_str = fmt(cur_val, units)
                 if n_lines <= 4:
-                    lbl_txt = f"{col}\n{val_str}"
+                    lbl_txt = f"{col}\n{arrow} {val_str}"
                 else:
-                    # Compact single line to reduce vertical clutter
-                    name_s  = col[:11] if len(col) > 11 else col
-                    lbl_txt = f"{name_s}: {val_str}"
-                val_labels[i].set_position((lx, ny))
+                    name_s  = col[:10] if len(col) > 10 else col
+                    lbl_txt = f"{name_s}: {arrow} {val_str}"
+                val_labels[i].set_position((lx_nud, ny))
                 val_labels[i].set_text(lbl_txt)
             else:
                 halo_outer[i].set_data([], [])
@@ -728,17 +710,20 @@ def create_bar_race_video(
     units: dict,
     total_duration_secs: float,
     raw_path: str,
+    colors: list[str] | None = None,
+    x_label: str = "",
+    y_label: str = "",
 ) -> str:
+    from matplotlib.offsetbox import AnnotationBbox, OffsetImage
+
     n_periods = len(df)
-    n_bars    = min(len(df.columns), len(LINE_COLORS))
+    n_bars    = min(len(df.columns), 8)
     df        = df.iloc[:, :n_bars].copy()
     cols      = list(df.columns)
-    colors    = LINE_COLORS[:n_bars]
+    bar_colors = (colors or DEFAULT_COLORS)[:n_bars]
 
     steps_per_period = max(2, int(total_duration_secs * FPS / max(n_periods-1, 1)))
     total_frames     = (n_periods-1) * steps_per_period + 1
-
-    from matplotlib.offsetbox import AnnotationBbox, OffsetImage
 
     x_raw   = np.arange(n_periods, dtype=float)
     x_dense = np.linspace(0, n_periods-1, total_frames)
@@ -751,54 +736,49 @@ def create_bar_race_video(
 
     Y_MAT  = np.column_stack([y_interp[c] for c in cols])
     x_max  = float(Y_MAT.max()) * 1.08 or 1.0
-    BAR_H  = 0.38    # sharp, vivid bar height
-    LERP   = 0.14    # per-frame lerp speed for rank transitions
+    BAR_H  = 0.38
+    LERP   = 0.14
+
+    first_vals = {col: float(df[col].iloc[0]) for col in cols}
 
     unit_desc = units.get("description", "")
     fig, ax, period_txt = _make_figure(chart_title, unit_desc)
 
-    # All spines off; thin vertical baseline at x=0
     for sp in ax.spines.values():
         sp.set_visible(False)
     ax.set_yticks([])
     ax.xaxis.set_visible(False)
 
-    # Left label strip (negative x region)
     LABEL_STRIP = x_max * 0.28
-    ax.set_xlim(-LABEL_STRIP, x_max * 1.06)
+    ax.set_xlim(-LABEL_STRIP, x_max * 1.12)
     ax.set_ylim(-0.65, n_bars - 0.35)
-    ax.invert_yaxis()   # rank-0 (highest) at top
-
+    ax.invert_yaxis()
     ax.axvline(x=0, color="#2A2A2A", linewidth=0.8, zorder=1)
 
-    # ── Initial ranking — sort descending by first-frame values ───────────────
     init_vals   = {col: float(Y_MAT[0, i]) for i, col in enumerate(cols)}
     sorted_init = sorted(cols, key=lambda c: -init_vals[c])
     bar_ypos    = {col: float(r) for r, col in enumerate(sorted_init)}
 
-    # ── Bar patches — plain Rectangles, antialiased=False for crisp edges ─────
     bar_patches: list[mpatches.Rectangle] = []
     for i, col in enumerate(cols):
         y0   = bar_ypos[col]
         rect = mpatches.Rectangle(
             (0, y0 - BAR_H / 2), 0.001, BAR_H,
-            linewidth=0, facecolor=colors[i], zorder=4, antialiased=False,
+            linewidth=0, facecolor=bar_colors[i], zorder=4, antialiased=False,
         )
         ax.add_patch(rect)
         bar_patches.append(rect)
 
-    # ── Name labels — left of baseline (label strip) ──────────────────────────
     name_labels: list = []
     for i, col in enumerate(cols):
         y0  = bar_ypos[col]
         lbl = ax.text(
             -LABEL_STRIP * 0.12, y0, col,
-            color=colors[i], fontsize=8.5, fontweight="bold",
+            color=bar_colors[i], fontsize=8.5, fontweight="bold",
             va="center", ha="right", zorder=12, clip_on=False,
         )
         name_labels.append(lbl)
 
-    # ── Value labels at right tip of each bar ─────────────────────────────────
     val_labels: list = []
     for i, col in enumerate(cols):
         y0  = bar_ypos[col]
@@ -814,12 +794,9 @@ def create_bar_race_video(
         p_idx = int(np.clip(round(x_dense[f]), 0, n_periods-1))
 
         cur_vals = {col: float(Y_MAT[f, ci]) for ci, col in enumerate(cols)}
-
-        # Target ranking: highest value → rank 0 (top)
         sorted_cols  = sorted(cols, key=lambda c: -cur_vals[c])
         target_ranks = {col: float(r) for r, col in enumerate(sorted_cols)}
 
-        # Smooth lerp → gradual overtake
         for col in cols:
             bar_ypos[col] += (target_ranks[col] - bar_ypos[col]) * LERP
 
@@ -834,7 +811,9 @@ def create_bar_race_video(
             name_labels[i].set_y(y)
             val_labels[i].set_y(y)
             val_labels[i].set_x(v + x_max * 0.014)
-            val_labels[i].set_text(fmt(v, units))
+
+            arrow   = _trend_arrow(v, first_vals[col])
+            val_labels[i].set_text(f"{arrow} {fmt(v, units)}")
 
         period_txt.set_text(_format_period_label(idx_labels[p_idx]))
 
@@ -894,35 +873,32 @@ def post_produce(raw_path: str, final_path: str, tmp_dir: str) -> str:
     video.close()
     return final_path
 
-# ── Static preview renderer (final-frame snapshot, no network calls) ──────────
+# ── Static preview renderer ────────────────────────────────────────────────────
 def render_preview_frame(
     df: pd.DataFrame,
     idx_labels: list[str],
     chart_title: str,
     units: dict,
     is_bar: bool = False,
+    colors: list[str] | None = None,
+    x_label: str = "",
+    y_label: str = "",
 ) -> bytes:
-    """
-    Render the final state of the chart as a PNG (bytes).
-    Uses initials-only icons so it's instant — no flag fetching.
-    """
     from matplotlib.offsetbox import AnnotationBbox, OffsetImage
 
-    cols     = list(df.columns)[:len(LINE_COLORS)]
+    cols     = list(df.columns)[:8]
     n_series = len(cols)
-    colors   = LINE_COLORS[:n_series]
-    icon_arrs = [_initials(colors[i], cols[i], 48) for i in range(n_series)]
+    line_colors = (colors or DEFAULT_COLORS)[:n_series]
+    icon_arrs = [_initials(line_colors[i], cols[i], 48) for i in range(n_series)]
     unit_desc = units.get("description", "")
+    first_vals = [float(df[col].iloc[0]) for col in cols]
 
     if is_bar:
-        # ── Bar preview ───────────────────────────────────────────────────────
         final_vals  = {col: float(df[col].iloc[-1]) for col in cols}
         sorted_cols = sorted(cols, key=lambda c: -final_vals[c])
         x_max       = max(final_vals.values()) * 1.08 or 1.0
         BAR_H       = 0.38
         LABEL_STRIP = x_max * 0.28
-        ICON_ZM     = 22 / 48.0
-        ICON_MIN_V  = x_max * 0.08
 
         fig, ax, period_txt = _make_figure(chart_title, unit_desc)
         period_txt.set_text(_format_period_label(idx_labels[-1]))
@@ -930,7 +906,7 @@ def render_preview_frame(
         for sp in ax.spines.values():
             sp.set_visible(False)
         ax.set_yticks([]); ax.xaxis.set_visible(False)
-        ax.set_xlim(-LABEL_STRIP, x_max * 1.06)
+        ax.set_xlim(-LABEL_STRIP, x_max * 1.12)
         ax.set_ylim(-0.65, n_series - 0.35)
         ax.invert_yaxis()
         ax.axvline(x=0, color="#2A2A2A", linewidth=0.8, zorder=1)
@@ -938,20 +914,19 @@ def render_preview_frame(
         for rank, col in enumerate(sorted_cols):
             v   = final_vals[col]
             ci  = cols.index(col)
-            c   = colors[ci]
-            vw  = max(v, 0.001)
+            c   = line_colors[ci]
             ax.add_patch(mpatches.Rectangle(
-                (0, rank - BAR_H / 2), vw, BAR_H,
+                (0, rank - BAR_H / 2), max(v, 0.001), BAR_H,
                 linewidth=0, facecolor=c, zorder=4, antialiased=False,
             ))
             ax.text(-LABEL_STRIP * 0.12, rank, col,
                     color=c, fontsize=9.5, fontweight="bold",
                     va="center", ha="right", clip_on=False)
-            ax.text(v + x_max * 0.014, rank, fmt(v, units),
+            arrow = _trend_arrow(v, float(df[col].iloc[0]))
+            ax.text(v + x_max * 0.014, rank, f"{arrow} {fmt(v, units)}",
                     color="#FFFFFF", fontsize=9.5, fontweight="bold",
                     va="center", ha="left", clip_on=False)
     else:
-        # ── Line preview ──────────────────────────────────────────────────────
         n      = len(df)
         vals   = df[cols].values.astype(float)
         y_min  = vals.min(); y_max = vals.max()
@@ -962,35 +937,39 @@ def render_preview_frame(
         fig, ax, period_txt = _make_figure(chart_title, unit_desc)
         period_txt.set_text(_format_period_label(idx_labels[-1]))
 
+        if x_label:
+            ax.set_xlabel(x_label, color="#666666", fontsize=9, labelpad=6)
+        if y_label:
+            ax.set_ylabel(y_label, color="#666666", fontsize=9, labelpad=6)
+
         ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: fmt(v, units)))
-        ax.tick_params(axis="y", labelcolor="#666666", labelsize=8, length=0, pad=4)
+        ax.tick_params(axis="y", labelcolor="#555555", labelsize=8, length=3, pad=4,
+                       direction="out", width=0.5)
         ax.set_xlim(-0.35, n - 0.65)
         ax.set_ylim(ylim_lo, ylim_hi)
 
-        cur_ylim  = (ylim_lo, ylim_hi)
         ylim_span = ylim_hi - ylim_lo
-        # Preview icon/label sizes — match animation
-        P_ICON_DP  = 13
+        P_ICON_DP  = 20
         P_ICON_ZM  = P_ICON_DP / 48.0
-        P_LBL_FONT = 8.0 if n_series <= 4 else 7.0
-        # Minimum nudge gap: font height × rows × 1.4
+        P_LBL_FONT = 8.5 if n_series <= 4 else 7.5
         n_rows_p   = 2 if n_series <= 4 else 1
         P_MIN_GAP  = (P_LBL_FONT * DPI / 72.0 * n_rows_p * 1.4) / (FIG_H * DPI) * ylim_span
 
         raw_ypos = [float(vals[-1, i]) for i in range(n_series)]
         nudged   = avoid_collisions(raw_ypos, P_MIN_GAP)
 
-        # Max 4 uniform x-axis ticks
-        n_ticks_p  = min(4, n)
+        n_ticks_p  = min(5, n)
         tick_pos_p = ([int(round(j * (n - 1) / (n_ticks_p - 1)))
                        for j in range(n_ticks_p)] if n_ticks_p > 1 else [0])
         ax.set_xticks(tick_pos_p)
         ax.set_xticklabels([idx_labels[i] for i in tick_pos_p],
-                           color="#666666", fontsize=9)
-        ax.tick_params(axis="x", length=0, pad=5)
+                           color="#555555", fontsize=8.5)
+        ax.tick_params(axis="x", length=3, pad=5, direction="out", width=0.5)
+
+        cur_ylim  = (ylim_lo, ylim_hi)
 
         for i, col in enumerate(cols):
-            c    = colors[i]
+            c    = line_colors[i]
             x    = list(range(n))
             y    = vals[:, i]
             xend = float(n - 1)
@@ -999,78 +978,99 @@ def render_preview_frame(
                                  cur_ylim[0] + ylim_span * 0.02,
                                  cur_ylim[1] - ylim_span * 0.02))
 
-            ax.plot(x, y, color=c, linewidth=2.5,
-                    solid_capstyle="round", zorder=4)
-            # Glow dots — same tight sizes as animation
-            ax.plot(xend, yend, "o", color=c, markersize=13, alpha=0.12,
+            ax.plot(x, y, color=c, linewidth=2.5, solid_capstyle="round", zorder=4)
+
+            # Glow layers
+            ax.plot(xend, yend, "o", color=c, markersize=16, alpha=0.10,
                     clip_on=False, zorder=6)
-            ax.plot(xend, yend, "o", color=c, markersize=8,  alpha=0.28,
+            ax.plot(xend, yend, "o", color=c, markersize=10, alpha=0.25,
                     clip_on=False, zorder=7)
-            ax.plot(xend, yend, "o", color=c, markersize=5,
-                    markeredgecolor="#FFFFFF", markeredgewidth=1.0,
+            ax.plot(xend, yend, "o", color=c, markersize=6,
+                    markeredgecolor="#FFFFFF", markeredgewidth=1.2,
                     clip_on=False, zorder=9)
 
-            # Icon: tiny, anchored to ACTUAL tip (yend) just right of dot
-            # Convert 2pt offset to data units for accurate placement
-            pts_to_data = ylim_span / ((_AX_T - _AX_B) * FIG_H * DPI / 72.0)
-            icon_x_off  = (P_ICON_DP + 2) * pts_to_data
-            lbl_x_off   = icon_x_off + (P_ICON_DP + 4) * pts_to_data
-
+            # Icon centered on dot
             iab = AnnotationBbox(
                 OffsetImage(icon_arrs[i], zoom=P_ICON_ZM, interpolation="lanczos"),
-                (xend + icon_x_off * 0.5, yend), xycoords="data",
-                box_alignment=(0, 0.5), frameon=False, zorder=10, clip_on=False,
+                (xend, yend), xycoords="data",
+                box_alignment=(0.5, 0.5),
+                frameon=False, zorder=11, clip_on=False,
             )
             ax.add_artist(iab)
 
-            val_s  = fmt(yend, units)
-            lbl_t  = f"{col}\n{val_s}" if n_series <= 4 else f"{col[:11]}: {val_s}"
-            ax.text(xend + lbl_x_off, ny,
-                    lbl_t,
+            # Label to the right of icon
+            arrow   = _trend_arrow(yend, first_vals[i])
+            val_s   = fmt(yend, units)
+            lbl_txt = f"{col}\n{arrow} {val_s}" if n_series <= 4 else f"{col[:10]}: {arrow} {val_s}"
+
+            # Approximate data-unit offset for label
+            pts_to_data = ylim_span / ((_AX_T - _AX_B) * FIG_H * DPI / 72.0)
+            lbl_x_off   = (P_ICON_DP / 2 + 6) * pts_to_data
+
+            ax.text(xend + lbl_x_off, ny, lbl_txt,
                     color=c, fontsize=P_LBL_FONT, fontweight="bold",
                     va="center", ha="left", clip_on=False,
-                    multialignment="left", linespacing=1.3)
+                    multialignment="left", linespacing=1.25)
 
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", facecolor=BG, dpi=DPI,
-                bbox_inches="tight")
+    fig.savefig(buf, format="png", facecolor=BG, dpi=DPI, bbox_inches="tight")
     plt.close(fig)
     buf.seek(0)
     return buf.read()
 
-# ── Trending topics ────────────────────────────────────────────────────────────
-def _reddit(sub: str, n: int = 5) -> list[str]:
+# ── Live trending topics ────────────────────────────────────────────────────────
+def _reddit_headlines(n: int = 12) -> list[str]:
+    titles = []
+    for sub in ["dataisbeautiful", "worldnews", "science", "technology", "economics"]:
+        try:
+            r = requests.get(
+                f"https://www.reddit.com/r/{sub}/hot.json?limit=6",
+                headers=REDDIT_UA, timeout=6,
+            )
+            if r.status_code == 200:
+                for p in r.json()["data"]["children"]:
+                    if not p["data"].get("stickied"):
+                        titles.append(p["data"]["title"])
+        except Exception:
+            pass
+        if len(titles) >= n:
+            break
+    return titles[:n]
+
+def _gnews_headlines(n: int = 10) -> list[str]:
     try:
-        r = requests.get(f"https://www.reddit.com/r/{sub}/hot.json?limit={n}",
-                         headers=REDDIT_UA, timeout=8)
+        r = requests.get(
+            "https://news.google.com/rss/search?q=statistics+data+economy+technology&hl=en-US&gl=US&ceid=US:en",
+            headers={"User-Agent": "Mozilla/5.0"}, timeout=8,
+        )
         if r.status_code == 200:
-            return [p["data"]["title"] for p in r.json()["data"]["children"]
-                    if not p["data"].get("stickied")]
+            titles = re.findall(r"<title>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</title>", r.text)
+            return [t for t in titles if t and "Google News" not in t and len(t) > 10][:n]
     except Exception:
         pass
     return []
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=1800, show_spinner=False)
 def get_trending_topics() -> list[str]:
     raw: list[str] = []
-    for sub in ["dataisbeautiful","worldnews","science","technology"]:
-        raw.extend(_reddit(sub))
-        if len(raw) >= 20:
-            break
+    raw.extend(_reddit_headlines(12))
+    raw.extend(_gnews_headlines(10))
     if not raw:
         return FALLBACK_TOPICS
     try:
         resp = client.chat.completions.create(
             model="gpt-5.1",
             messages=[
-                {"role": "system", "content":
-                    "Turn headlines into 8 animated line-chart prompts (time-series). "
-                    "One per line, no bullets, no numbering."},
+                {"role": "system", "content": (
+                    "Turn these headlines into 8 animated data chart prompts suitable "
+                    "for a line or bar chart race. Each prompt should cover a time range "
+                    "ending in 2024 or 2025. One prompt per line, no bullets, no numbering."
+                )},
                 {"role": "user", "content":
-                    f"Trending:\n" + "\n".join(f"- {t}" for t in raw[:24]) +
+                    "Recent headlines:\n" + "\n".join(f"- {t}" for t in raw[:20]) +
                     "\n\nGenerate 8 chart prompts."},
             ],
-            max_completion_tokens=300,
+            max_completion_tokens=350,
         )
         lines = [l.strip() for l in
                  resp.choices[0].message.content.strip().splitlines() if l.strip()]
@@ -1080,54 +1080,49 @@ def get_trending_topics() -> list[str]:
         pass
     return FALLBACK_TOPICS
 
-# ── Streamlit UI ───────────────────────────────────────────────────────────────
-st.set_page_config(page_title="Topic-to-Reel", page_icon="🎬", layout="centered")
+# ── Streamlit page config ──────────────────────────────────────────────────────
+st.set_page_config(page_title="Topic-to-Reel", page_icon="🎬", layout="wide")
 
-col_h1, col_h2 = st.columns([3, 1])
-with col_h1:
-    st.title("Topic-to-Reel")
-    st.caption("Generate a 1080×1920 animated Reel from a topic, file, or your own data.")
-with col_h2:
-    st.markdown(
-        f"<div style='text-align:right;padding-top:28px;color:#555;"
-        f"font-style:italic;font-size:13px'>{BRAND}</div>",
-        unsafe_allow_html=True,
-    )
-
-# ── Session state ──────────────────────────────────────────────────────────────
+# ── Session state defaults ─────────────────────────────────────────────────────
 _defaults: dict = {
-    "topic_value":          "",
-    "pending_df":           None,
-    "pending_title":        "",
-    "pending_topic":        "",
-    "pending_labels":       None,
-    "pending_units":        {},
+    "topic_value":           "",
+    "pending_df":            None,
+    "pending_title":         "",
+    "pending_topic":         "",
+    "pending_labels":        None,
+    "pending_units":         {},
     "pending_preview_bytes": None,
-    "_preview_is_bar":      False,
-    "last_video":           None,
-    "last_caption":         "",
-    "last_hashtags":        [],
-    "history":              [],
-    "custom_icons":         {},
+    "_preview_is_bar":       False,
+    "last_video":            None,
+    "last_caption":          "",
+    "last_hashtags":         [],
+    "history":               [],
+    "custom_icons":          {},
+    "custom_colors":         [],
+    "custom_title":          "",
+    "custom_subtitle":       "",
+    "custom_x_label":        "",
+    "custom_y_label":        "",
+    "custom_unit_prefix":    "",
+    "custom_unit_suffix":    "",
+    "custom_series_names":   {},
+    "input_mode":            "🤖  AI Topic",
 }
 for k, v in _defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
 def _store_df(df: pd.DataFrame, title: str, topic: str) -> None:
-    """Resample → detect units → render preview → store all in session state."""
     try:
         df_rs, labels = temporal_resample(df)
     except ResamplingFrequencyMismatch:
         df_rs, labels = df, [str(v) for v in df.index]
 
-    # Detect units (fast LLM call — max 120 tokens)
     try:
         units = detect_units(topic, df_rs)
     except Exception:
         units = {"prefix": "", "suffix": "", "description": "", "is_pct": False}
 
-    # Render final-frame preview (pure matplotlib, no network)
     try:
         preview_bytes = render_preview_frame(df_rs, labels, title, units, is_bar=False)
     except Exception:
@@ -1138,333 +1133,465 @@ def _store_df(df: pd.DataFrame, title: str, topic: str) -> None:
         pending_topic=topic, pending_labels=labels,
         pending_units=units, pending_preview_bytes=preview_bytes,
         custom_icons={},
+        custom_title=title,
+        custom_subtitle=units.get("description", ""),
+        custom_unit_prefix=units.get("prefix", ""),
+        custom_unit_suffix=units.get("suffix", ""),
+        custom_series_names={col: col for col in df_rs.columns},
+        custom_colors=DEFAULT_COLORS[:len(df_rs.columns)],
     )
 
-# ── Input tabs ─────────────────────────────────────────────────────────────────
-tab_ai, tab_upload, tab_paste, tab_csv = st.tabs([
-    "🤖  AI Topic", "📁  Upload File", "📋  Paste Data", "📝  CSV Input",
-])
+# ═══════════════════════════════════════════════════════════════════════════════
+#  SIDEBAR — All input + trending
+# ═══════════════════════════════════════════════════════════════════════════════
+with st.sidebar:
+    st.markdown(f"### 🎬 Topic-to-Reel")
+    st.caption(f"*{BRAND}*")
+    st.divider()
 
-# Tab 1 — AI Topic
-with tab_ai:
-    with st.spinner("Fetching trending topics…"):
-        suggestions = get_trending_topics()
-    st.markdown("**Trending today:**")
-    bcols = st.columns(2)
-    for idx, sug in enumerate(suggestions):
-        if bcols[idx % 2].button(sug, key=f"sug_{idx}", use_container_width=True):
-            st.session_state["topic_value"] = sug
-            st.rerun()
-
-    topic_in = st.text_area("Or type your own topic", key="topic_value",
-                             placeholder="e.g. US vs China GDP 1980–2024", height=80)
-    if st.button("Load AI Data", key="load_ai", type="primary", use_container_width=True):
-        if not topic_in.strip():
-            st.warning("Enter a topic first.")
-        else:
-            with st.spinner("Researching data with AI…"):
-                try:
-                    df, title = extract_data_from_llm(topic_in)
-                    _store_df(df, title, topic_in)
-                    pdf = st.session_state["pending_df"]
-                    st.success(f"Loaded **{title}** — {len(pdf)} rows × {len(pdf.columns)} series")
-                    st.dataframe(pdf.head(8), use_container_width=True)
-                except DataIndexError as e:
-                    st.error(f"**DataIndexError:** {e}")
-                except Exception as e:
-                    st.error(f"**Error ({type(e).__name__}):** {e}")
-
-# Tab 2 — Upload
-with tab_upload:
-    st.markdown("Upload a **CSV** or **XLSX**. First column = time index, rest = series.")
-    uploaded = st.file_uploader("Choose file", type=["csv","xlsx","xls","txt"],
-                                key="file_upload")
-    if uploaded:
-        try:
-            df, title = parse_uploaded_file(uploaded)
-            _store_df(df, title, title)
-            pdf = st.session_state["pending_df"]
-            st.success(f"Loaded **{title}** — {len(pdf)} rows × {len(pdf.columns)} series")
-            st.dataframe(pdf.head(8), use_container_width=True)
-        except (DataIndexError, ResamplingFrequencyMismatch) as e:
-            st.error(f"**{type(e).__name__}:** {e}")
-        except Exception as e:
-            st.error(f"**Error ({type(e).__name__}):** {e}")
-
-# Tab 3 — Paste (AI-parsed)
-with tab_paste:
-    st.markdown("Paste **any data** — Wikipedia table, rough notes. AI structures it into CSV.")
-    raw_paste = st.text_area("Paste data here", height=200,
-                             placeholder="Year,India,USA\n2000,477,10300\n2005,820,13000\n…")
-    if st.button("Parse & Load", key="parse_paste", use_container_width=True):
-        if not raw_paste.strip():
-            st.warning("Paste some data first.")
-        else:
-            with st.spinner("Parsing with AI…"):
-                try:
-                    df, title = parse_pasted_data(raw_paste)
-                    _store_df(df, title, title)
-                    pdf = st.session_state["pending_df"]
-                    st.success(f"Loaded **{title}** — {len(pdf)} rows × {len(pdf.columns)} series")
-                    st.dataframe(pdf.head(8), use_container_width=True)
-                except (DataIndexError, ResamplingFrequencyMismatch) as e:
-                    st.error(f"**{type(e).__name__}:** {e}")
-                except Exception as e:
-                    st.error(f"**Error ({type(e).__name__}):** {e}")
-
-# Tab 4 — Raw CSV input
-with tab_csv:
-    st.markdown(
-        "Paste **raw CSV** — first column is the time index, "
-        "remaining columns are your data series."
+    # ── Input mode ────────────────────────────────────────────────────────────
+    input_mode = st.radio(
+        "**Data source**",
+        ["🤖  AI Topic", "📁  Upload File", "📋  Paste Data", "📝  Raw CSV"],
+        index=["🤖  AI Topic", "📁  Upload File", "📋  Paste Data", "📝  Raw CSV"].index(
+            st.session_state["input_mode"]
+        ),
     )
-    st.markdown(
-        """
-        ```
-        Year,India,China,USA
-        2000,477,1211,10300
-        2005,820,1810,13000
-        2010,1676,5879,14964
-        2015,2103,11016,18037
-        2020,2660,14688,20894
-        2024,3732,17795,27360
-        ```
-        """
-    )
-    csv_input = st.text_area("Paste CSV here", height=220,
-                             placeholder="Year,Series A,Series B\n2000,100,80\n2001,110,85\n…",
-                             key="csv_raw_input")
-    csv_title = st.text_input("Chart title", placeholder="e.g. GDP Race 2000–2024",
-                               key="csv_title_input")
-    if st.button("Load CSV", key="load_csv", use_container_width=True):
-        if not csv_input.strip():
-            st.warning("Paste CSV data first.")
-        else:
+    st.session_state["input_mode"] = input_mode
+    st.divider()
+
+    # ── AI Topic ──────────────────────────────────────────────────────────────
+    if input_mode == "🤖  AI Topic":
+        st.markdown("**🔥 Trending now**")
+        col_r1, col_r2 = st.columns([3, 1])
+        with col_r1:
+            st.caption("From Reddit & news, refreshed every 30 min")
+        with col_r2:
+            if st.button("↺", help="Refresh trending topics", use_container_width=True):
+                get_trending_topics.clear()
+                st.rerun()
+
+        with st.spinner("Fetching live topics…"):
+            suggestions = get_trending_topics()
+
+        for idx, sug in enumerate(suggestions):
+            if st.button(sug, key=f"sug_{idx}", use_container_width=True):
+                st.session_state["topic_value"] = sug
+                st.rerun()
+
+        st.divider()
+        topic_in = st.text_area(
+            "Or type your own topic",
+            key="topic_value",
+            placeholder="e.g. US vs China EV sales 2015–2025",
+            height=80,
+        )
+        if st.button("🚀 Load AI Data", type="primary", use_container_width=True):
+            if not topic_in.strip():
+                st.warning("Enter a topic first.")
+            else:
+                with st.spinner("Researching with AI…"):
+                    try:
+                        df, title = extract_data_from_llm(topic_in)
+                        _store_df(df, title, topic_in)
+                        st.success(f"✅ Loaded **{title}**")
+                    except DataIndexError as e:
+                        st.error(f"**DataIndexError:** {e}")
+                    except Exception as e:
+                        st.error(f"**Error:** {e}")
+
+    # ── Upload ────────────────────────────────────────────────────────────────
+    elif input_mode == "📁  Upload File":
+        st.markdown("Upload a **CSV** or **XLSX**.")
+        st.caption("First column = time index, rest = series.")
+        uploaded = st.file_uploader("Choose file", type=["csv","xlsx","xls","txt"],
+                                    key="file_upload")
+        if uploaded:
             try:
-                df, title = parse_csv_text(csv_input, csv_title)
+                df, title = parse_uploaded_file(uploaded)
                 _store_df(df, title, title)
-                pdf = st.session_state["pending_df"]
-                st.success(f"Loaded **{title}** — {len(pdf)} rows × {len(pdf.columns)} series")
-                st.dataframe(pdf.head(10), use_container_width=True)
+                st.success(f"✅ Loaded **{title}**")
             except (DataIndexError, ResamplingFrequencyMismatch) as e:
                 st.error(f"**{type(e).__name__}:** {e}")
             except Exception as e:
-                st.error(f"**Error ({type(e).__name__}):** {e}")
+                st.error(f"**Error:** {e}")
 
-# ── Settings (above data preview so is_bar is known for preview rendering) ────
-st.divider()
-with st.expander("⚙️  Settings", expanded=True):
-    chart_type = st.radio(
-        "Chart type",
-        ["📈  Line Chart Race", "📊  Bar Chart Race"],
-        horizontal=True,
-    )
-    is_bar = "Bar" in chart_type
-
-    if is_bar:
-        bar_duration = st.slider(
-            "Total animation duration (seconds)",
-            min_value=5, max_value=60, value=20, step=5,
-        )
-        st.caption(
-            f"⏱  {bar_duration}s total · bars animate through all "
-            f"{len(st.session_state['pending_df']) if st.session_state['pending_df'] is not None else '—'} "
-            "time periods"
-        )
-    else:
-        steps = st.slider(
-            "Frames per time period  (higher = slower, smoother)",
-            min_value=8, max_value=60, value=28, step=4,
-        )
-        n_p = len(st.session_state["pending_df"]) if st.session_state["pending_df"] is not None else 25
-        est = (n_p - 1) * steps / FPS
-        st.caption(
-            f"⏱  Each period ≈ **{steps/FPS:.1f}s** → "
-            f"estimated length **{est:.0f}s** ({est/60:.1f} min)  |  "
-            f"{n_p} periods · Catmull-Rom spline"
-        )
-
-# ── Data preview ──────────────────────────────────────────────────────────────
-if st.session_state["pending_df"] is not None:
-    pdf = st.session_state["pending_df"]
-    st.divider()
-
-    # ── Re-render preview when chart type changes ───────────────────────────
-    if st.session_state.get("pending_preview_bytes") and is_bar != st.session_state.get("_preview_is_bar", False):
-        try:
-            st.session_state["pending_preview_bytes"] = render_preview_frame(
-                pdf,
-                st.session_state.get("pending_labels") or [str(v) for v in pdf.index],
-                st.session_state["pending_title"],
-                st.session_state.get("pending_units", {}),
-                is_bar=is_bar,
-            )
-            st.session_state["_preview_is_bar"] = is_bar
-        except Exception:
-            pass
-
-    if st.session_state.get("pending_preview_bytes"):
-        unit_lbl = st.session_state.get("pending_units", {}).get("description", "values")
-        st.markdown("##### Chart preview")
-        col_l, col_c, col_r = st.columns([1, 5, 1])
-        with col_c:
-            st.image(
-                st.session_state["pending_preview_bytes"],
-                caption=f"Final frame  ·  {unit_lbl}",
-                use_container_width=True,
-            )
-
-    with st.expander(
-        f"📊 **{st.session_state['pending_title']}** — "
-        f"{len(pdf)} rows × {len(pdf.columns)} series", expanded=False
-    ):
-        st.dataframe(pdf, use_container_width=True)
-
-    # Custom icon uploads (line chart only)
-    if not is_bar:
-        with st.expander("🖼️  Custom icons  (optional — leave blank for auto flags/initials)",
-                         expanded=False):
-            series_cols = list(pdf.columns)
-            n_ic_cols   = min(len(series_cols), 4)
-            ic_cols     = st.columns(n_ic_cols)
-            for i, col in enumerate(series_cols):
-                with ic_cols[i % n_ic_cols]:
-                    up = st.file_uploader(col, type=["png","jpg","jpeg","webp"],
-                                          key=f"icon_{col}")
-                    if up is not None:
-                        st.session_state["custom_icons"][col] = up.read()
-                    if col in st.session_state["custom_icons"]:
-                        try:
-                            st.image(Image.open(io.BytesIO(
-                                st.session_state["custom_icons"][col])).resize((40,40)),
-                                caption=f"{col} ✓", width=40)
-                        except Exception:
-                            pass
-                        if st.button("✕ Remove", key=f"rm_{col}"):
-                            del st.session_state["custom_icons"][col]
-                            st.rerun()
-
-# ── Generate ──────────────────────────────────────────────────────────────────
-st.divider()
-generate = st.button(
-    "🎬  Generate Reel", type="primary", use_container_width=True,
-    disabled=(st.session_state["pending_df"] is None),
-)
-if st.session_state["pending_df"] is None:
-    st.info("Load data in any tab above, then hit **Generate Reel**.")
-
-if generate and st.session_state["pending_df"] is not None:
-    df          = st.session_state["pending_df"]
-    idx_labels  = st.session_state.get("pending_labels") or [str(v) for v in df.index]
-    chart_title = st.session_state["pending_title"]
-    topic_str   = st.session_state["pending_topic"] or chart_title
-
-    progress = st.progress(0, text="Starting…")
-    status   = st.empty()
-
-    try:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            raw_mp4   = os.path.join(tmp_dir, "race.mp4")
-            final_mp4 = os.path.join(tmp_dir, "reel.mp4")
-
-            progress.progress(5, text="Detecting units…")
-            status.info("📐  Detecting data units…")
-            n_lines     = min(len(df.columns), len(LINE_COLORS))
-            df_use      = df.iloc[:, :n_lines]
-            colors_used = LINE_COLORS[:n_lines]
-            # Reuse units already detected at data-load time (avoids duplicate LLM call)
-            cached_units = st.session_state.get("pending_units") or {}
-            units = cached_units if cached_units else detect_units(topic_str, df_use)
-
-            progress.progress(14, text="Fetching icons…")
-            status.info("🏳  Fetching category icons…")
-            icon_arrays = get_icons(
-                list(df_use.columns), colors_used, size=48,
-                custom_icons=st.session_state.get("custom_icons", {}),
-            )
-
-            progress.progress(22, text="Rendering animation…")
-            if is_bar:
-                status.info(
-                    f"📊  Rendering bar race **{chart_title}**  —  "
-                    f"{len(df_use)} periods × {n_lines} bars  ·  {bar_duration}s duration"
-                )
-                create_bar_race_video(
-                    df_use, idx_labels, chart_title,
-                    icon_arrays, units, bar_duration, raw_mp4,
-                )
+    # ── Paste ────────────────────────────────────────────────────────────────
+    elif input_mode == "📋  Paste Data":
+        st.markdown("Paste **any data** — Wikipedia table, rough notes.")
+        st.caption("AI will structure it into a chart-ready CSV.")
+        raw_paste = st.text_area("Paste data here", height=180,
+                                 placeholder="Year,India,USA\n2000,477,10300\n…")
+        if st.button("🔍 Parse & Load", use_container_width=True):
+            if not raw_paste.strip():
+                st.warning("Paste some data first.")
             else:
-                n_frames = (len(df_use)-1) * steps + 1
-                status.info(
-                    f"📈  Rendering line race **{chart_title}**  —  "
-                    f"{len(df_use)} periods × {n_lines} series  ·  {n_frames} frames"
+                with st.spinner("AI is parsing your data…"):
+                    try:
+                        df, title = parse_pasted_data(raw_paste)
+                        _store_df(df, title, title)
+                        st.success(f"✅ Loaded **{title}**")
+                    except (DataIndexError, ResamplingFrequencyMismatch) as e:
+                        st.error(f"**{type(e).__name__}:** {e}")
+                    except Exception as e:
+                        st.error(f"**Error:** {e}")
+
+    # ── Raw CSV ───────────────────────────────────────────────────────────────
+    elif input_mode == "📝  Raw CSV":
+        st.markdown("Paste **raw CSV**.")
+        st.caption("First column = time index, rest = series.")
+        csv_input = st.text_area("CSV here", height=200,
+                                 placeholder="Year,A,B\n2000,100,80\n2001,110,85\n…",
+                                 key="csv_raw_input")
+        csv_title = st.text_input("Chart title (optional)", key="csv_title_input",
+                                  placeholder="e.g. GDP Race 2000–2024")
+        if st.button("📥 Load CSV", use_container_width=True):
+            if not csv_input.strip():
+                st.warning("Paste CSV data first.")
+            else:
+                try:
+                    df, title = parse_csv_text(csv_input, csv_title)
+                    _store_df(df, title, title)
+                    st.success(f"✅ Loaded **{title}**")
+                except (DataIndexError, ResamplingFrequencyMismatch) as e:
+                    st.error(f"**{type(e).__name__}:** {e}")
+                except Exception as e:
+                    st.error(f"**Error:** {e}")
+
+    # ── Data preview ──────────────────────────────────────────────────────────
+    if st.session_state["pending_df"] is not None:
+        st.divider()
+        pdf = st.session_state["pending_df"]
+        with st.expander(f"📊 Data: {st.session_state['pending_title']}", expanded=False):
+            st.dataframe(pdf.head(10), use_container_width=True)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  MAIN AREA
+# ═══════════════════════════════════════════════════════════════════════════════
+if st.session_state["pending_df"] is None:
+    st.markdown("## 🎬 Topic-to-Reel")
+    st.markdown(f"*{BRAND}* — Generate a **1080×1920 animated Reel** from any topic.")
+    st.info("👈 Pick a data source from the sidebar to get started.")
+else:
+    pdf   = st.session_state["pending_df"]
+    cols  = list(pdf.columns)
+    n_col = len(cols)
+
+    # ── Top header ────────────────────────────────────────────────────────────
+    st.markdown(f"## {st.session_state.get('custom_title') or st.session_state['pending_title']}")
+
+    # ── Two-column layout: customise | preview ────────────────────────────────
+    left, right = st.columns([1, 1], gap="large")
+
+    with left:
+        # ── Chart type ───────────────────────────────────────────────────────
+        st.markdown("#### ⚙️ Chart Settings")
+        chart_type = st.radio(
+            "Chart type",
+            ["📈  Line Chart Race", "📊  Bar Chart Race"],
+            horizontal=True,
+        )
+        is_bar = "Bar" in chart_type
+
+        if is_bar:
+            bar_duration = st.slider("Duration (seconds)", 5, 60, 20, 5)
+            st.caption(f"⏱ {bar_duration}s · {len(pdf)} periods")
+        else:
+            steps = st.slider("Frames per period (higher = slower)", 8, 60, 28, 4)
+            n_p   = len(pdf)
+            est   = (n_p - 1) * steps / FPS
+            st.caption(f"⏱ ≈ {est:.0f}s total · {n_p} periods")
+
+        # ── Re-render preview when chart type changes ─────────────────────────
+        if (st.session_state.get("pending_preview_bytes")
+                and is_bar != st.session_state.get("_preview_is_bar", False)):
+            try:
+                st.session_state["pending_preview_bytes"] = render_preview_frame(
+                    pdf,
+                    st.session_state.get("pending_labels") or [str(v) for v in pdf.index],
+                    st.session_state.get("custom_title") or st.session_state["pending_title"],
+                    {
+                        "prefix":      st.session_state.get("custom_unit_prefix", ""),
+                        "suffix":      st.session_state.get("custom_unit_suffix", ""),
+                        "description": st.session_state.get("custom_subtitle", ""),
+                        "is_pct":      st.session_state["pending_units"].get("is_pct", False),
+                    },
+                    is_bar=is_bar,
+                    colors=st.session_state.get("custom_colors") or DEFAULT_COLORS,
+                    x_label=st.session_state.get("custom_x_label", ""),
+                    y_label=st.session_state.get("custom_y_label", ""),
                 )
-                create_line_race_video(
-                    df_use, idx_labels, chart_title,
-                    icon_arrays, units, steps, raw_mp4,
+                st.session_state["_preview_is_bar"] = is_bar
+            except Exception:
+                pass
+
+        st.divider()
+
+        # ── Metadata editor ───────────────────────────────────────────────────
+        st.markdown("#### ✏️ Customise Labels")
+
+        st.session_state["custom_title"] = st.text_input(
+            "Chart title",
+            value=st.session_state.get("custom_title") or st.session_state["pending_title"],
+        )
+        st.session_state["custom_subtitle"] = st.text_input(
+            "Subtitle / unit description",
+            value=st.session_state.get("custom_subtitle", ""),
+            placeholder="e.g. GDP in USD Billions",
+        )
+
+        c1, c2 = st.columns(2)
+        with c1:
+            st.session_state["custom_x_label"] = st.text_input(
+                "X-axis label",
+                value=st.session_state.get("custom_x_label", ""),
+                placeholder="e.g. Year",
+            )
+            st.session_state["custom_unit_prefix"] = st.text_input(
+                "Value prefix",
+                value=st.session_state.get("custom_unit_prefix", ""),
+                placeholder="e.g. $",
+            )
+        with c2:
+            st.session_state["custom_y_label"] = st.text_input(
+                "Y-axis label",
+                value=st.session_state.get("custom_y_label", ""),
+                placeholder="e.g. Value (Billions)",
+            )
+            st.session_state["custom_unit_suffix"] = st.text_input(
+                "Value suffix",
+                value=st.session_state.get("custom_unit_suffix", ""),
+                placeholder="e.g. B or %",
+            )
+
+        st.divider()
+
+        # ── Series names + colors ─────────────────────────────────────────────
+        st.markdown("#### 🎨 Series Names & Colors")
+        n_show = min(n_col, 8)
+        series_cols_ui = st.columns(2)
+        custom_series = st.session_state.get("custom_series_names", {col: col for col in cols})
+        custom_colors = st.session_state.get("custom_colors") or DEFAULT_COLORS[:n_show]
+
+        new_series_names: dict = {}
+        new_colors: list = list(custom_colors)
+
+        for i, col in enumerate(cols[:n_show]):
+            with series_cols_ui[i % 2]:
+                new_name = st.text_input(
+                    f"Series {i+1}",
+                    value=custom_series.get(col, col),
+                    key=f"sname_{i}",
+                    label_visibility="collapsed",
+                )
+                new_colors[i] = st.color_picker(
+                    f"Color {i+1}",
+                    value=custom_colors[i] if i < len(custom_colors) else DEFAULT_COLORS[i % 8],
+                    key=f"cpick_{i}",
+                    label_visibility="collapsed",
+                )
+                new_series_names[col] = new_name
+
+        st.session_state["custom_series_names"] = new_series_names
+        st.session_state["custom_colors"]        = new_colors
+
+        # Custom icons (line chart only)
+        if not is_bar:
+            with st.expander("🖼️ Custom icons (optional)", expanded=False):
+                ic_cols = st.columns(min(n_show, 4))
+                for i, col in enumerate(cols[:n_show]):
+                    with ic_cols[i % 4]:
+                        up = st.file_uploader(
+                            new_series_names.get(col, col)[:8],
+                            type=["png","jpg","jpeg","webp"],
+                            key=f"icon_{col}",
+                        )
+                        if up is not None:
+                            st.session_state["custom_icons"][col] = up.read()
+                        if col in st.session_state["custom_icons"]:
+                            try:
+                                st.image(Image.open(io.BytesIO(
+                                    st.session_state["custom_icons"][col])).resize((36,36)),
+                                    width=36)
+                            except Exception:
+                                pass
+                            if st.button("✕", key=f"rm_{col}"):
+                                del st.session_state["custom_icons"][col]
+                                st.rerun()
+
+    with right:
+        st.markdown("#### 🖼️ Chart Preview")
+        if st.session_state.get("pending_preview_bytes"):
+            # Build effective units from custom fields
+            eff_units = {
+                "prefix":      st.session_state.get("custom_unit_prefix", "")
+                               or st.session_state["pending_units"].get("prefix", ""),
+                "suffix":      st.session_state.get("custom_unit_suffix", "")
+                               or st.session_state["pending_units"].get("suffix", ""),
+                "description": st.session_state.get("custom_subtitle", "")
+                               or st.session_state["pending_units"].get("description", ""),
+                "is_pct":      st.session_state["pending_units"].get("is_pct", False),
+            }
+
+            if st.button("🔄 Refresh preview", use_container_width=True):
+                # Rename columns to custom names before preview
+                df_preview = pdf.rename(columns=st.session_state["custom_series_names"])
+                try:
+                    preview = render_preview_frame(
+                        df_preview,
+                        st.session_state.get("pending_labels") or [str(v) for v in pdf.index],
+                        st.session_state.get("custom_title") or st.session_state["pending_title"],
+                        eff_units,
+                        is_bar=is_bar,
+                        colors=st.session_state.get("custom_colors") or DEFAULT_COLORS,
+                        x_label=st.session_state.get("custom_x_label", ""),
+                        y_label=st.session_state.get("custom_y_label", ""),
+                    )
+                    st.session_state["pending_preview_bytes"] = preview
+                    st.session_state["_preview_is_bar"] = is_bar
+                except Exception as e:
+                    st.warning(f"Preview failed: {e}")
+
+            col_l, col_c, col_r = st.columns([0.5, 9, 0.5])
+            with col_c:
+                st.image(
+                    st.session_state["pending_preview_bytes"],
+                    caption="Final frame preview",
+                    use_container_width=True,
+                )
+        else:
+            st.info("Preview will appear here after loading data.")
+
+    # ── Generate button ───────────────────────────────────────────────────────
+    st.divider()
+    generate = st.button(
+        "🎬  Generate Reel",
+        type="primary",
+        use_container_width=True,
+        disabled=(st.session_state["pending_df"] is None),
+    )
+
+    if generate:
+        df          = st.session_state["pending_df"]
+        idx_labels  = st.session_state.get("pending_labels") or [str(v) for v in df.index]
+        topic_str   = st.session_state["pending_topic"] or st.session_state["pending_title"]
+
+        # Apply custom series names
+        snames = st.session_state.get("custom_series_names", {})
+        df_use = df.rename(columns=snames)
+        chart_title = st.session_state.get("custom_title") or st.session_state["pending_title"]
+        n_lines = min(len(df_use.columns), 8)
+        df_use  = df_use.iloc[:, :n_lines]
+        eff_colors = (st.session_state.get("custom_colors") or DEFAULT_COLORS)[:n_lines]
+
+        eff_units = {
+            "prefix":      st.session_state.get("custom_unit_prefix", "")
+                           or st.session_state["pending_units"].get("prefix", ""),
+            "suffix":      st.session_state.get("custom_unit_suffix", "")
+                           or st.session_state["pending_units"].get("suffix", ""),
+            "description": st.session_state.get("custom_subtitle", "")
+                           or st.session_state["pending_units"].get("description", ""),
+            "is_pct":      st.session_state["pending_units"].get("is_pct", False),
+        }
+
+        x_lbl = st.session_state.get("custom_x_label", "")
+        y_lbl = st.session_state.get("custom_y_label", "")
+
+        progress = st.progress(0, text="Starting…")
+        status   = st.empty()
+
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                raw_mp4   = os.path.join(tmp_dir, "race.mp4")
+                final_mp4 = os.path.join(tmp_dir, "reel.mp4")
+
+                progress.progress(10, text="Fetching icons…")
+                status.info("🏳  Fetching category icons…")
+                icon_arrays = get_icons(
+                    list(df_use.columns), eff_colors, size=48,
+                    custom_icons=st.session_state.get("custom_icons", {}),
                 )
 
-            progress.progress(78, text="Adding music…")
-            status.info("🎵  Adding background music…")
-            post_produce(raw_mp4, final_mp4, tmp_dir)
+                progress.progress(22, text="Rendering animation…")
+                if is_bar:
+                    status.info(f"📊  Rendering bar race — {len(df_use)} periods")
+                    create_bar_race_video(
+                        df_use, idx_labels, chart_title,
+                        icon_arrays, eff_units, bar_duration, raw_mp4,
+                        colors=eff_colors, x_label=x_lbl, y_label=y_lbl,
+                    )
+                else:
+                    n_frames = (len(df_use)-1) * steps + 1
+                    status.info(f"📈  Rendering line race — {n_frames} frames")
+                    create_line_race_video(
+                        df_use, idx_labels, chart_title,
+                        icon_arrays, eff_units, steps, raw_mp4,
+                        colors=eff_colors, x_label=x_lbl, y_label=y_lbl,
+                    )
 
-            progress.progress(91, text="Generating caption…")
-            status.info("✍️  Writing caption…")
-            caption, hashtags = generate_caption(topic_str, chart_title, df_use, units)
+                progress.progress(78, text="Adding music…")
+                status.info("🎵  Adding background music…")
+                post_produce(raw_mp4, final_mp4, tmp_dir)
 
-            progress.progress(100, text="Done!")
-            status.success("✅  Reel ready!")
+                progress.progress(90, text="Generating caption…")
+                status.info("✍️  Writing Instagram caption…")
+                caption, hashtags = generate_caption(topic_str, chart_title, df_use, eff_units)
 
-            with open(final_mp4, "rb") as fh:
-                video_bytes = fh.read()
+                progress.progress(100, text="Done!")
+                status.success("✅  Reel ready!")
 
-        st.session_state["last_video"]    = video_bytes
-        st.session_state["last_caption"]  = caption
-        st.session_state["last_hashtags"] = hashtags
+                with open(final_mp4, "rb") as fh:
+                    video_bytes = fh.read()
 
-        st.session_state["history"].append({
-            "ts":     datetime.now().strftime("%H:%M:%S"),
-            "title":  chart_title,
-            "type":   "bar" if is_bar else "line",
-            "rows":   len(df_use),
-            "series": n_lines,
-            "bytes":  len(video_bytes),
-        })
-        st.session_state["history"] = st.session_state["history"][-5:]
+            st.session_state["last_video"]    = video_bytes
+            st.session_state["last_caption"]  = caption
+            st.session_state["last_hashtags"] = hashtags
 
-    except (DataIndexError, ResamplingFrequencyMismatch, RenderingError) as exc:
-        progress.empty(); status.empty()
-        st.error(f"**{type(exc).__name__}:** {exc}")
-        with st.expander("🔍 Debug trace"):
-            st.code(traceback.format_exc())
-    except Exception as exc:
-        progress.empty(); status.empty()
-        st.error(f"**Error ({type(exc).__name__}):** {exc}")
-        with st.expander("🔍 Debug trace"):
-            st.code(traceback.format_exc())
+            st.session_state["history"].append({
+                "ts":     datetime.now().strftime("%H:%M:%S"),
+                "title":  chart_title,
+                "type":   "bar" if is_bar else "line",
+                "rows":   len(df_use),
+                "series": n_lines,
+                "bytes":  len(video_bytes),
+            })
+            st.session_state["history"] = st.session_state["history"][-5:]
 
-# ── Output ────────────────────────────────────────────────────────────────────
+        except (DataIndexError, ResamplingFrequencyMismatch, RenderingError) as exc:
+            progress.empty(); status.empty()
+            st.error(f"**{type(exc).__name__}:** {exc}")
+            with st.expander("🔍 Debug trace"):
+                st.code(traceback.format_exc())
+        except Exception as exc:
+            progress.empty(); status.empty()
+            st.error(f"**Error ({type(exc).__name__}):** {exc}")
+            with st.expander("🔍 Debug trace"):
+                st.code(traceback.format_exc())
+
+# ── Output ─────────────────────────────────────────────────────────────────────
 if st.session_state["last_video"]:
     video_bytes = st.session_state["last_video"]
     st.divider()
-    st.subheader("Your Reel")
-    st.video(video_bytes)
+    out_l, out_r = st.columns([1, 1], gap="large")
+    with out_l:
+        st.subheader("🎬 Your Reel")
+        st.video(video_bytes)
+        st.download_button(
+            label="⬇️  Download MP4  (1080 × 1920)",
+            data=video_bytes,
+            file_name=f"reel_{int(time.time())}.mp4",
+            mime="video/mp4",
+            use_container_width=True,
+        )
+    with out_r:
+        st.subheader("📝 Caption")
+        st.caption("Copy & paste to Instagram / TikTok")
+        hashtag_line = " ".join(f"#{h}" for h in st.session_state["last_hashtags"])
+        st.code(f"{st.session_state['last_caption']}\n\n{hashtag_line}", language=None)
 
-    st.download_button(
-        label="⬇️  Download MP4  (1080 × 1920)",
-        data=video_bytes,
-        file_name=f"reel_{int(time.time())}.mp4",
-        mime="video/mp4",
-        use_container_width=True,
-    )
-
-    st.subheader("Caption — copy & paste to Instagram")
-    hashtag_line = " ".join(f"#{h}" for h in st.session_state["last_hashtags"])
-    st.code(f"{st.session_state['last_caption']}\n\n{hashtag_line}", language=None)
-
-# ── History ───────────────────────────────────────────────────────────────────
+# ── History ─────────────────────────────────────────────────────────────────────
 if st.session_state["history"]:
-    st.divider()
     with st.expander(
         f"🕘  Generation history  ({len(st.session_state['history'])} entries)",
         expanded=False
