@@ -548,12 +548,14 @@ def create_line_race_video(
     ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: fmt(v, units)))
     ax.tick_params(axis="y", labelcolor="#666666", labelsize=8, length=0, pad=4)
 
-    tick_step = max(1, n_periods // 6)
-    tick_pos  = list(range(0, n_periods, tick_step))
+    # Show at most 4 uniformly distributed x-axis tick labels
+    n_ticks  = min(4, n_periods)
+    tick_pos = ([int(round(j * (n_periods - 1) / (n_ticks - 1)))
+                 for j in range(n_ticks)] if n_ticks > 1 else [0])
     ax.set_xticks(tick_pos)
     ax.set_xticklabels([idx_labels[i] for i in tick_pos],
-                       color="#555555", fontsize=8, rotation=0)
-    ax.tick_params(axis="x", length=0, pad=4)
+                       color="#666666", fontsize=9, rotation=0)
+    ax.tick_params(axis="x", length=0, pad=5)
 
     ax.set_xlim(xlim_lo, min(xlim_lo + ELASTIC_AHEAD + 1.0, xlim_hi_max))
     ax.set_ylim(ylim_lo, ylim_hi)
@@ -571,14 +573,14 @@ def create_line_race_video(
         ml, = ax.plot([], [], color=c, linewidth=2.2,
                       solid_capstyle="round", zorder=4)
 
-        # Layered glow: outer ring → inner ring → solid dot
-        ho, = ax.plot([], [], "o", color=c, markersize=28, alpha=0.10,
+        # Layered glow: outer ring → inner ring → solid dot (deliberately small/tight)
+        ho, = ax.plot([], [], "o", color=c, markersize=13, alpha=0.12,
                       zorder=6, clip_on=False)
-        hi, = ax.plot([], [], "o", color=c, markersize=16, alpha=0.22,
+        hi, = ax.plot([], [], "o", color=c, markersize=8,  alpha=0.28,
                       zorder=7, clip_on=False)
-        dot,= ax.plot([], [], "o", color=c, markersize=7,
+        dot,= ax.plot([], [], "o", color=c, markersize=5,
                       markerfacecolor=c, markeredgecolor="#FFFFFF",
-                      markeredgewidth=1.4, zorder=9, clip_on=False)
+                      markeredgewidth=1.0, zorder=9, clip_on=False)
 
         # Icon via AnnotationBbox — pixel-accurate, no data-coord math
         iim = OffsetImage(icon_arrays[i], zoom=ICON_ZOOM, interpolation="lanczos")
@@ -665,15 +667,17 @@ def create_line_race_video(
                 halo_inner[i].set_data([xend], [yend])
                 tip_dots[i].set_data([xend], [yend])
 
-                # Convert tip to display px, offset icon to the right
                 try:
-                    tx, ty = _data_to_disp(xend, ny)
-                    ix, _  = _disp_to_data(tx + DOT_TO_ICON, ty)
-                    lx, _  = _disp_to_data(tx + DOT_TO_ICON + ICON_TO_LBL, ty)
+                    # Icon anchored to ACTUAL line tip (yend) — stays on the trail
+                    tx_tip, ty_tip = _data_to_disp(xend, yend)
+                    ix, _          = _disp_to_data(tx_tip + DOT_TO_ICON, ty_tip)
+                    # Label anchored to NUDGED position (ny) — avoids text collisions
+                    tx_nud, ty_nud = _data_to_disp(xend, ny)
+                    lx, _          = _disp_to_data(tx_nud + DOT_TO_ICON + ICON_TO_LBL, ty_nud)
                 except Exception:
                     ix, lx = xend, xend
 
-                icon_boxes[i].xy = (ix, ny)
+                icon_boxes[i].xy = (ix, yend)
                 icon_boxes[i].set_visible(True)
 
                 val_labels[i].set_position((lx, ny))
@@ -740,11 +744,6 @@ def create_bar_race_video(
     x_max  = float(Y_MAT.max()) * 1.08 or 1.0
     BAR_H  = 0.38    # sharp, vivid bar height
     LERP   = 0.14    # per-frame lerp speed for rank transitions
-    # Icon inside bar: display points; zoom relative to 48px source
-    ICON_DP_B = 22
-    ICON_ZM_B = ICON_DP_B / 48.0
-    # Minimum bar width (in data coords) before icon is hidden
-    ICON_MIN_V = x_max * 0.08
 
     unit_desc = units.get("description", "")
     fig, ax, period_txt = _make_figure(chart_title, unit_desc)
@@ -778,20 +777,6 @@ def create_bar_race_video(
         )
         ax.add_patch(rect)
         bar_patches.append(rect)
-
-    # ── Icons — AnnotationBbox centred INSIDE the bar (x = v/2, y = bar_y) ───
-    icon_boxes_b: list[AnnotationBbox] = []
-    for i, col in enumerate(cols):
-        y0  = bar_ypos[col]
-        iim = OffsetImage(icon_arrays[i], zoom=ICON_ZM_B, interpolation="lanczos")
-        iab = AnnotationBbox(
-            iim, (0.001, y0),
-            xycoords="data",
-            box_alignment=(0.5, 0.5),
-            frameon=False, zorder=10, clip_on=False,
-        )
-        ax.add_artist(iab)
-        icon_boxes_b.append(iab)
 
     # ── Name labels — left of baseline (label strip) ──────────────────────────
     name_labels: list = []
@@ -836,11 +821,6 @@ def create_bar_race_video(
 
             bar_patches[i].set_y(y - BAR_H / 2)
             bar_patches[i].set_width(vw)
-
-            # Icon: centre of bar (x = v/2, y = bar rank pos); hide when bar is tiny
-            icon_x = vw / 2.0
-            icon_boxes_b[i].xy = (icon_x, y)
-            icon_boxes_b[i].set_visible(vw >= ICON_MIN_V)
 
             name_labels[i].set_y(y)
             val_labels[i].set_y(y)
@@ -955,18 +935,11 @@ def render_preview_frame(
                 (0, rank - BAR_H / 2), vw, BAR_H,
                 linewidth=0, facecolor=c, zorder=4, antialiased=False,
             ))
-            if vw >= ICON_MIN_V:
-                iab = AnnotationBbox(
-                    OffsetImage(icon_arrs[ci], zoom=ICON_ZM, interpolation="lanczos"),
-                    (vw / 2, float(rank)), xycoords="data",
-                    box_alignment=(0.5, 0.5), frameon=False, zorder=10, clip_on=False,
-                )
-                ax.add_artist(iab)
             ax.text(-LABEL_STRIP * 0.12, rank, col,
-                    color=c, fontsize=8.5, fontweight="bold",
+                    color=c, fontsize=9.5, fontweight="bold",
                     va="center", ha="right", clip_on=False)
             ax.text(v + x_max * 0.014, rank, fmt(v, units),
-                    color="#FFFFFF", fontsize=8.5, fontweight="bold",
+                    color="#FFFFFF", fontsize=9.5, fontweight="bold",
                     va="center", ha="left", clip_on=False)
     else:
         # ── Line preview ──────────────────────────────────────────────────────
@@ -997,6 +970,15 @@ def render_preview_frame(
         cur_ylim = (ylim_lo, ylim_hi)
         ylim_span = ylim_hi - ylim_lo
 
+        # Max 4 uniform x-axis ticks in preview too
+        n_ticks_p  = min(4, n)
+        tick_pos_p = ([int(round(j * (n - 1) / (n_ticks_p - 1)))
+                       for j in range(n_ticks_p)] if n_ticks_p > 1 else [0])
+        ax.set_xticks(tick_pos_p)
+        ax.set_xticklabels([idx_labels[i] for i in tick_pos_p],
+                           color="#666666", fontsize=9)
+        ax.tick_params(axis="x", length=0, pad=5)
+
         for i, col in enumerate(cols):
             c    = colors[i]
             x    = list(range(n))
@@ -1007,30 +989,33 @@ def render_preview_frame(
                                  cur_ylim[0] + ylim_span * 0.02,
                                  cur_ylim[1] - ylim_span * 0.02))
 
-            ax.plot(x, y, color=c, linewidth=2.2,
+            ax.plot(x, y, color=c, linewidth=2.5,
                     solid_capstyle="round", zorder=4)
-            ax.plot(xend, yend, "o", color=c, markersize=28, alpha=0.10,
+            # Tight glow — same sizes as animation
+            ax.plot(xend, yend, "o", color=c, markersize=13, alpha=0.12,
                     clip_on=False, zorder=6)
-            ax.plot(xend, yend, "o", color=c, markersize=16, alpha=0.22,
+            ax.plot(xend, yend, "o", color=c, markersize=8,  alpha=0.28,
                     clip_on=False, zorder=7)
-            ax.plot(xend, yend, "o", color=c, markersize=7,
-                    markeredgecolor="#FFFFFF", markeredgewidth=1.4,
+            ax.plot(xend, yend, "o", color=c, markersize=5,
+                    markeredgecolor="#FFFFFF", markeredgewidth=1.0,
                     clip_on=False, zorder=9)
 
+            # Icon anchored to ACTUAL tip (yend), not nudged label position
+            data_offset = (n - 1) * 0.03 + 0.15   # small right offset in data units
             iab = AnnotationBbox(
                 OffsetImage(icon_arrs[i], zoom=ICON_ZOOM, interpolation="lanczos"),
-                (xend + 0.08, ny), xycoords="data",
+                (xend + data_offset, yend), xycoords="data",
                 box_alignment=(0, 0.5), frameon=False, zorder=10, clip_on=False,
             )
             ax.add_artist(iab)
-            ax.text(xend + 0.55, ny,
+            ax.text(xend + data_offset + (n - 1) * 0.06 + 0.35, ny,
                     f"{col}\n{fmt(yend, units)}",
-                    color=c, fontsize=8.5, fontweight="bold",
+                    color=c, fontsize=9, fontweight="bold",
                     va="center", ha="left", clip_on=False,
                     multialignment="left", linespacing=1.4)
 
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", facecolor=BG, dpi=DPI // 2,
+    fig.savefig(buf, format="png", facecolor=BG, dpi=DPI,
                 bbox_inches="tight")
     plt.close(fig)
     buf.seek(0)
@@ -1101,6 +1086,7 @@ _defaults: dict = {
     "pending_labels":       None,
     "pending_units":        {},
     "pending_preview_bytes": None,
+    "_preview_is_bar":      False,
     "last_video":           None,
     "last_caption":         "",
     "last_hashtags":        [],
@@ -1248,53 +1234,7 @@ with tab_csv:
             except Exception as e:
                 st.error(f"**Error ({type(e).__name__}):** {e}")
 
-# ── Data preview ──────────────────────────────────────────────────────────────
-if st.session_state["pending_df"] is not None:
-    pdf = st.session_state["pending_df"]
-    st.divider()
-
-    # ── Static chart preview (final-frame snapshot) ────────────────────────
-    if st.session_state.get("pending_preview_bytes"):
-        st.markdown("##### Chart preview")
-        col_l, col_c, col_r = st.columns([1, 5, 1])
-        with col_c:
-            st.image(
-                st.session_state["pending_preview_bytes"],
-                caption="Final frame — units: "
-                        + st.session_state.get("pending_units", {}).get("description", "values"),
-                use_container_width=True,
-            )
-
-    with st.expander(
-        f"📊 **{st.session_state['pending_title']}** — "
-        f"{len(pdf)} rows × {len(pdf.columns)} series", expanded=False
-    ):
-        st.dataframe(pdf, use_container_width=True)
-
-    # Custom icon uploads
-    with st.expander("🖼️  Custom icons  (optional — leave blank for auto flags/initials)",
-                     expanded=False):
-        series_cols = list(pdf.columns)
-        n_ic_cols   = min(len(series_cols), 4)
-        ic_cols     = st.columns(n_ic_cols)
-        for i, col in enumerate(series_cols):
-            with ic_cols[i % n_ic_cols]:
-                up = st.file_uploader(col, type=["png","jpg","jpeg","webp"],
-                                      key=f"icon_{col}")
-                if up is not None:
-                    st.session_state["custom_icons"][col] = up.read()
-                if col in st.session_state["custom_icons"]:
-                    try:
-                        st.image(Image.open(io.BytesIO(
-                            st.session_state["custom_icons"][col])).resize((40,40)),
-                            caption=f"{col} ✓", width=40)
-                    except Exception:
-                        pass
-                    if st.button("✕ Remove", key=f"rm_{col}"):
-                        del st.session_state["custom_icons"][col]
-                        st.rerun()
-
-# ── Settings ──────────────────────────────────────────────────────────────────
+# ── Settings (above data preview so is_bar is known for preview rendering) ────
 st.divider()
 with st.expander("⚙️  Settings", expanded=True):
     chart_type = st.radio(
@@ -1320,12 +1260,72 @@ with st.expander("⚙️  Settings", expanded=True):
             min_value=8, max_value=60, value=28, step=4,
         )
         n_p = len(st.session_state["pending_df"]) if st.session_state["pending_df"] is not None else 25
-        est = (n_p-1) * steps / FPS
+        est = (n_p - 1) * steps / FPS
         st.caption(
             f"⏱  Each period ≈ **{steps/FPS:.1f}s** → "
             f"estimated length **{est:.0f}s** ({est/60:.1f} min)  |  "
             f"{n_p} periods · Catmull-Rom spline"
         )
+
+# ── Data preview ──────────────────────────────────────────────────────────────
+if st.session_state["pending_df"] is not None:
+    pdf = st.session_state["pending_df"]
+    st.divider()
+
+    # ── Re-render preview when chart type changes ───────────────────────────
+    if st.session_state.get("pending_preview_bytes") and is_bar != st.session_state.get("_preview_is_bar", False):
+        try:
+            st.session_state["pending_preview_bytes"] = render_preview_frame(
+                pdf,
+                st.session_state.get("pending_labels") or [str(v) for v in pdf.index],
+                st.session_state["pending_title"],
+                st.session_state.get("pending_units", {}),
+                is_bar=is_bar,
+            )
+            st.session_state["_preview_is_bar"] = is_bar
+        except Exception:
+            pass
+
+    if st.session_state.get("pending_preview_bytes"):
+        unit_lbl = st.session_state.get("pending_units", {}).get("description", "values")
+        st.markdown("##### Chart preview")
+        col_l, col_c, col_r = st.columns([1, 5, 1])
+        with col_c:
+            st.image(
+                st.session_state["pending_preview_bytes"],
+                caption=f"Final frame  ·  {unit_lbl}",
+                use_container_width=True,
+            )
+
+    with st.expander(
+        f"📊 **{st.session_state['pending_title']}** — "
+        f"{len(pdf)} rows × {len(pdf.columns)} series", expanded=False
+    ):
+        st.dataframe(pdf, use_container_width=True)
+
+    # Custom icon uploads (line chart only)
+    if not is_bar:
+        with st.expander("🖼️  Custom icons  (optional — leave blank for auto flags/initials)",
+                         expanded=False):
+            series_cols = list(pdf.columns)
+            n_ic_cols   = min(len(series_cols), 4)
+            ic_cols     = st.columns(n_ic_cols)
+            for i, col in enumerate(series_cols):
+                with ic_cols[i % n_ic_cols]:
+                    up = st.file_uploader(col, type=["png","jpg","jpeg","webp"],
+                                          key=f"icon_{col}")
+                    if up is not None:
+                        st.session_state["custom_icons"][col] = up.read()
+                    if col in st.session_state["custom_icons"]:
+                        try:
+                            st.image(Image.open(io.BytesIO(
+                                st.session_state["custom_icons"][col])).resize((40,40)),
+                                caption=f"{col} ✓", width=40)
+                        except Exception:
+                            pass
+                        if st.button("✕ Remove", key=f"rm_{col}"):
+                            del st.session_state["custom_icons"][col]
+                            st.rerun()
 
 # ── Generate ──────────────────────────────────────────────────────────────────
 st.divider()
