@@ -427,11 +427,11 @@ def avoid_collisions(positions: list[float], min_gap: float,
 # ── Shared figure scaffold ─────────────────────────────────────────────────────
 # Layout constants (figure fractions from bottom):
 #   0.00–0.03  bottom pad
-#   0.03–0.19  period counter (HUGE)
-#   0.19–0.74  chart area
-#   0.74–0.88  title + subtitle block
-#   0.88–1.00  brand + padding
-_AX_B = 0.20; _AX_T = 0.74
+#   0.03–0.17  period counter (HUGE)
+#   0.17–0.83  chart area  ← taller now
+#   0.83–0.96  title + subtitle block  ← moved up / closer to chart
+#   0.96–1.00  brand
+_AX_B = 0.18; _AX_T = 0.83
 _AX_L = 0.13; _AX_R = 0.70
 FIG_W, FIG_H, DPI = 6.75, 12.0, 160
 
@@ -441,17 +441,17 @@ def _make_figure(chart_title: str, subtitle: str) -> tuple:
     fig = plt.figure(figsize=(FIG_W, FIG_H), facecolor=BG, dpi=DPI)
 
     # Brand – very top, tiny, dim
-    fig.text(0.50, 0.972, BRAND, ha="center", va="top",
+    fig.text(0.50, 0.975, BRAND, ha="center", va="top",
              fontsize=8, color="#3A3A3A", fontstyle="italic")
 
-    # Title – large bold, left-aligned
-    fig.text(_AX_L, 0.955, chart_title, ha="left", va="top",
-             fontsize=20, fontweight="bold", color="#FFFFFF",
+    # Title – large bold, left-aligned — pulled down close to chart
+    fig.text(_AX_L, 0.960, chart_title, ha="left", va="top",
+             fontsize=19, fontweight="bold", color="#FFFFFF",
              wrap=True)
 
     # Subtitle (unit description) – smaller, dimmer
     if subtitle:
-        fig.text(_AX_L, 0.905, subtitle, ha="left", va="top",
+        fig.text(_AX_L, 0.912, subtitle, ha="left", va="top",
                  fontsize=10, color="#888888")
 
     # Chart axes
@@ -471,7 +471,7 @@ def _make_figure(chart_title: str, subtitle: str) -> tuple:
     ax.set_axisbelow(True)
 
     # Period counter – HUGE, centred below chart
-    period_txt = fig.text(0.50, 0.115, "",
+    period_txt = fig.text(0.50, 0.090, "",
                           ha="center", va="center",
                           fontsize=34, fontweight="bold", color="#FFFFFF")
 
@@ -530,15 +530,15 @@ def create_line_race_video(
     xlim_hi_max   = n_periods - 0.65
     ELASTIC_AHEAD = 1.65
 
-    # Icon display sizes in points (1 point = 1/72 inch; DPI conversion handled by matplotlib)
-    # AnnotationBbox / OffsetImage renders at fixed display pixels regardless of data scale.
-    ICON_DP      = 22   # icon rendered size in display points
-    ICON_ZOOM    = ICON_DP / 48.0           # 48px source → 22pt display
-    GLOW_ZOOM    = (ICON_DP * 2.0) / 80.0  # 80px source → 44pt display
-    # Pixel offset (in display points) from line-tip dot to left edge of icon
-    DOT_TO_ICON  = 7
-    # Pixel offset from left edge of icon to left edge of text label
-    ICON_TO_LBL  = ICON_DP + 5
+    # Icon display sizes — small and tight, same visual scale as the glow dots
+    ICON_DP      = 13   # icon rendered size in display points (≈ dot size)
+    ICON_ZOOM    = ICON_DP / 48.0   # 48px source → 13pt display
+    # Minimal gap from line-tip dot to left edge of icon
+    DOT_TO_ICON  = 2
+    # Gap from icon right edge to label left edge
+    ICON_TO_LBL  = ICON_DP + 4
+    # Adaptive label font: smaller when many series to reduce clutter
+    LBL_FONT     = 8.0 if n_lines <= 4 else 7.0
 
     unit_desc = units.get("description", "")
     fig, ax, period_txt = _make_figure(chart_title, unit_desc)
@@ -594,9 +594,9 @@ def create_line_race_video(
         ax.add_artist(iab)
 
         lbl = ax.text(0, 0, "",
-                      color=c, fontsize=8.5, fontweight="bold",
+                      color=c, fontsize=LBL_FONT, fontweight="bold",
                       va="center", ha="left", zorder=12, clip_on=False,
-                      multialignment="left", linespacing=1.4)
+                      multialignment="left", linespacing=1.3)
 
         main_lines.append(ml)
         halo_outer.append(ho)
@@ -643,8 +643,10 @@ def create_line_race_video(
             _, y1_px = _data_to_disp(0, cur_ylim[1])
             px_per_y = abs(y1_px - y0_px)
             ylim_span = cur_ylim[1] - cur_ylim[0]
-            # Minimum gap in data units = ICON_DP * 1.15 display points
-            min_gap_data = ICON_DP * 1.15 / px_per_y * ylim_span if px_per_y > 0 else ylim_span * 0.05
+            # Minimum gap = label font height * 1.3 rows in data units
+            font_px      = LBL_FONT * DPI / 72.0 * 1.3  # px per label row
+            n_rows       = 2 if n_lines <= 4 else 1       # two-line vs one-line
+            min_gap_data = font_px * n_rows / px_per_y * ylim_span if px_per_y > 0 else ylim_span * 0.05
         except Exception:
             min_gap_data = (cur_ylim[1] - cur_ylim[0]) * 0.05
 
@@ -680,8 +682,15 @@ def create_line_race_video(
                 icon_boxes[i].xy = (ix, yend)
                 icon_boxes[i].set_visible(True)
 
+                val_str = fmt(float(Y_MAT[f, i]), units)
+                if n_lines <= 4:
+                    lbl_txt = f"{col}\n{val_str}"
+                else:
+                    # Compact single line to reduce vertical clutter
+                    name_s  = col[:11] if len(col) > 11 else col
+                    lbl_txt = f"{name_s}: {val_str}"
                 val_labels[i].set_position((lx, ny))
-                val_labels[i].set_text(f"{col}\n{fmt(float(Y_MAT[f, i]), units)}")
+                val_labels[i].set_text(lbl_txt)
             else:
                 halo_outer[i].set_data([], [])
                 halo_inner[i].set_data([], [])
@@ -950,27 +959,28 @@ def render_preview_frame(
         y_pad  = y_rng * 0.08
         ylim_lo = y_min - y_pad
         ylim_hi = y_max + y_pad * 2.5
-        ICON_DP = 22; ICON_ZOOM = ICON_DP / 48.0
-
         fig, ax, period_txt = _make_figure(chart_title, unit_desc)
         period_txt.set_text(_format_period_label(idx_labels[-1]))
 
         ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: fmt(v, units)))
         ax.tick_params(axis="y", labelcolor="#666666", labelsize=8, length=0, pad=4)
-        tick_step = max(1, n // 6)
-        tick_pos  = list(range(0, n, tick_step))
-        ax.set_xticks(tick_pos)
-        ax.set_xticklabels([idx_labels[i] for i in tick_pos],
-                           color="#555555", fontsize=8)
         ax.set_xlim(-0.35, n - 0.65)
         ax.set_ylim(ylim_lo, ylim_hi)
 
-        raw_ypos = [float(vals[-1, i]) for i in range(n_series)]
-        nudged   = avoid_collisions(raw_ypos, (ylim_hi - ylim_lo) * 0.055)
-        cur_ylim = (ylim_lo, ylim_hi)
+        cur_ylim  = (ylim_lo, ylim_hi)
         ylim_span = ylim_hi - ylim_lo
+        # Preview icon/label sizes — match animation
+        P_ICON_DP  = 13
+        P_ICON_ZM  = P_ICON_DP / 48.0
+        P_LBL_FONT = 8.0 if n_series <= 4 else 7.0
+        # Minimum nudge gap: font height × rows × 1.4
+        n_rows_p   = 2 if n_series <= 4 else 1
+        P_MIN_GAP  = (P_LBL_FONT * DPI / 72.0 * n_rows_p * 1.4) / (FIG_H * DPI) * ylim_span
 
-        # Max 4 uniform x-axis ticks in preview too
+        raw_ypos = [float(vals[-1, i]) for i in range(n_series)]
+        nudged   = avoid_collisions(raw_ypos, P_MIN_GAP)
+
+        # Max 4 uniform x-axis ticks
         n_ticks_p  = min(4, n)
         tick_pos_p = ([int(round(j * (n - 1) / (n_ticks_p - 1)))
                        for j in range(n_ticks_p)] if n_ticks_p > 1 else [0])
@@ -991,7 +1001,7 @@ def render_preview_frame(
 
             ax.plot(x, y, color=c, linewidth=2.5,
                     solid_capstyle="round", zorder=4)
-            # Tight glow — same sizes as animation
+            # Glow dots — same tight sizes as animation
             ax.plot(xend, yend, "o", color=c, markersize=13, alpha=0.12,
                     clip_on=False, zorder=6)
             ax.plot(xend, yend, "o", color=c, markersize=8,  alpha=0.28,
@@ -1000,19 +1010,26 @@ def render_preview_frame(
                     markeredgecolor="#FFFFFF", markeredgewidth=1.0,
                     clip_on=False, zorder=9)
 
-            # Icon anchored to ACTUAL tip (yend), not nudged label position
-            data_offset = (n - 1) * 0.03 + 0.15   # small right offset in data units
+            # Icon: tiny, anchored to ACTUAL tip (yend) just right of dot
+            # Convert 2pt offset to data units for accurate placement
+            pts_to_data = ylim_span / ((_AX_T - _AX_B) * FIG_H * DPI / 72.0)
+            icon_x_off  = (P_ICON_DP + 2) * pts_to_data
+            lbl_x_off   = icon_x_off + (P_ICON_DP + 4) * pts_to_data
+
             iab = AnnotationBbox(
-                OffsetImage(icon_arrs[i], zoom=ICON_ZOOM, interpolation="lanczos"),
-                (xend + data_offset, yend), xycoords="data",
+                OffsetImage(icon_arrs[i], zoom=P_ICON_ZM, interpolation="lanczos"),
+                (xend + icon_x_off * 0.5, yend), xycoords="data",
                 box_alignment=(0, 0.5), frameon=False, zorder=10, clip_on=False,
             )
             ax.add_artist(iab)
-            ax.text(xend + data_offset + (n - 1) * 0.06 + 0.35, ny,
-                    f"{col}\n{fmt(yend, units)}",
-                    color=c, fontsize=9, fontweight="bold",
+
+            val_s  = fmt(yend, units)
+            lbl_t  = f"{col}\n{val_s}" if n_series <= 4 else f"{col[:11]}: {val_s}"
+            ax.text(xend + lbl_x_off, ny,
+                    lbl_t,
+                    color=c, fontsize=P_LBL_FONT, fontweight="bold",
                     va="center", ha="left", clip_on=False,
-                    multialignment="left", linespacing=1.4)
+                    multialignment="left", linespacing=1.3)
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", facecolor=BG, dpi=DPI,
