@@ -1034,7 +1034,7 @@ def create_pie_race_video(
         fig.text(_AX_L, subtitle_y, unit_desc, ha="left", va="top",
                  fontsize=10, color="#888888")
         subtitle_y = 0.900
-    fig.text(_AX_L, subtitle_y - 0.004, "v Read caption for more",
+    fig.text(_AX_L, subtitle_y - 0.004, "Read caption for more",
              ha="left", va="top", fontsize=9, color="#FF6B35", fontstyle="italic")
     period_txt = fig.text(0.50, 0.090, "", ha="center", va="center",
                           fontsize=36, fontweight="bold", color="#FFFFFF")
@@ -1191,7 +1191,7 @@ def create_radar_race_video(
         fig.text(_AX_L, subtitle_y, unit_desc, ha="left", va="top",
                  fontsize=10, color="#888888")
         subtitle_y = 0.900
-    fig.text(_AX_L, subtitle_y - 0.004, "v Read caption for more",
+    fig.text(_AX_L, subtitle_y - 0.004, "Read caption for more",
              ha="left", va="top", fontsize=9, color="#FF6B35", fontstyle="italic")
     period_txt = fig.text(0.50, 0.090, "", ha="center", va="center",
                           fontsize=36, fontweight="bold", color="#FFFFFF")
