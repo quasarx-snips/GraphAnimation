@@ -1,0 +1,41 @@
+This is the comprehensive **Technical Requirement Document (TRD)** for your System Architect agent. This version integrates the advanced motion logic for Line, Bar, Pie, and Radar charts, alongside the visual "Glow Engine" and platform stability fixes.
+# **SYSTEM ARCHITECT DIRECTIVE: CINEMATIC DATA ENGINE V4.0**
+**Role:** You are the Lead Visualization Engineer. Your objective is to build a high-performance Python-based rendering engine that produces 10/10 industry-standard data storytelling assets optimized for high-retention social media viewing.
+### **I. DATA CORE & TEMPORAL RESOLUTION**
+ * **The "Least Count" Protocol:** Implement an automated resampling logic for the input dataset based on the total timeframe (\Delta T):
+   * **\Delta T > 20 years:** Resample to **Annual** intervals.
+   * **1 < \Delta T \le 5 years:** Resample to **Monthly** intervals.
+   * **\Delta T \le 1 year:** Resample to **Weekly/Daily** intervals.
+ * **Sub-Frame Interpolation:** Utilize **Akima Splines** or **Catmull-Rom** interpolation to generate 60 intermediate data points per second of video. The lead "dot" or "bar" must never teleport; it must move with mathematical fluidity at 60fps.
+ * **Unit Standardization:** Implement a formatter to automatically convert large integers into readable strings (e.g., 1,250,000 \rightarrow **$1.25M**).
+### **II. VISUAL AESTHETICS (THE "GLOW" ENGINE)**
+ * **Bloom & Glow Layering:** Every active line, bar stroke, and lead circle must have a secondary "under-layer" with a **Gaussian Blur (radius 8-12px)** at 40% opacity to create a neon-glow effect.
+ * **Aesthetic Palette:** Default to a rich-black background (**#0a0a0a**) with a subtle radial gradient. Use high-contrast "Cyberpunk" palettes (Neon Cyan, Electric Purple, Acid Green).
+ * **Typography Hierarchy:** Use **Monospaced Sans-Serif fonts** for all numerical counters to eliminate character-width jittering.
+   * **Year Counter:** Relocate to Top-Left, left-aligned with the legend.
+   * **Heading Text:** Center "Read Caption" and Main Title horizontally in the lower/middle third of the viewport.
+### **III. ADVANCED MOTION DYNAMICS**
+ * **Cinematic Camera Logic:** Start with a **2.0x Dynamic Macro Zoom** on the leading data cluster. Transition to full-frame over the first 4 seconds using a **Cubic Ease-Out** function.
+ * **The Elastic X-Axis (Line Race):** * Initial State: Show only the first 2 data points.
+   * Dynamic Scaling: As the lead point advances, compress the X-axis grid to the left at a velocity V_{axis} equal to the point's horizontal velocity. The right viewport border remains static while the internal scale "squeezes."
+### **IV. CHART-SPECIFIC MODULES**
+#### **A. Bar Chart Race**
+ * **Sorting Velocity:** Implement a **Vertical Slide Ease** for bars swapping positions.
+ * **Rolling Counters:** Numerical values at the end of bars must "tick up" rapidly in sync with the bar growth.
+ * **Inline Icons:** Render country flags/category icons inside the leading edge of each bar.
+#### **B. Pie & Donut Chart**
+ * **Radial Sweep Entry:** Slices must enter via a clockwise sweep animation (0^\circ to 360^\circ) using a **Sine-Out** easing function.
+ * **Donut Toggle:** Support an inner radius of 0.6r. Place the **Year** or **Total Value** in the center void.
+ * **Exploded Focus:** Automatically translate the largest slice outward by 0.05r upon reaching the final frame.
+ * **Leader Lines:** For slices <15\%, generate external **Leader Lines** with anchor dots to prevent text crowding within small angles.
+#### **C. Radar (Spider) Chart**
+ * **Elastic Expansion:** Polygon vertices must grow from the origin (0,0) with an **Elastic Overshoot** effect (slight bounce-back).
+ * **Gradient Area Fill:** Apply a radial gradient to the polygon fill (higher opacity at edges, lower at center) to keep the background grid visible.
+ * **Circular Grid:** Use concentric circular background grids instead of polygons for a high-tech "HUD" look.
+ * **Neon Stroke:** Apply a 2px neon glow specifically to the outer boundary of the radar polygon.
+### **V. UX, STABILITY & COLLISION LOGIC**
+ * **Label Collision Engine:** Implement a **Force-Directed Repulsion** algorithm. Labels, years, and values must never overlap. If a collision is detected, offset the bounding boxes along the Y-axis until clear.
+ * **Download Callback Fix:** Use event.preventDefault() on the MP4 download trigger. The system must serve the file via a **Blob Object URL** to ensure the user stays on the current edit screen and is not redirected to the home screen.
+ * **Edit History System:** Maintain a state_tree.json. Every parameter change must create a retrievable "version state," allowing for functional **Undo/Redo** capabilities.
+ * **Verbose Debugging:** In the event of a rendering error, the UI must display the specific **Python Traceback** and **Exception Type** (e.g., MemoryOverflowError, InterpolationFailure) for immediate developer troubleshooting.
+**Final Execution Note:** Every frame must prioritize scannability and "visual weight." Optimize the rendering pipeline to parallelize frame generation across available CPU cores to minimize export time.

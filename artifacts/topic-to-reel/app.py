@@ -32,8 +32,14 @@ client = OpenAI(
 # ── Constants ──────────────────────────────────────────────────────────────────
 FONT_BOLD = "/run/current-system/sw/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 DEFAULT_COLORS = [
-    "#FF6B35", "#4FC3F7", "#69F0AE", "#FFD740",
-    "#E040FB", "#FF7043", "#40C4FF", "#B9F6CA",
+    "#00E5FF",  # Neon Cyan
+    "#E040FB",  # Electric Purple
+    "#69FF47",  # Acid Green
+    "#FF2D55",  # Hot Pink
+    "#FFD700",  # Gold
+    "#FF6B35",  # Orange
+    "#0091FF",  # Electric Blue
+    "#FF9500",  # Amber
 ]
 MUSIC_URLS = [
     "https://cdn.pixabay.com/download/audio/2021/09/23/audio_57bc8dcb4e.mp3",
@@ -41,18 +47,20 @@ MUSIC_URLS = [
 ]
 REDDIT_UA  = {"User-Agent": "TopicToReel/1.0 (by /u/topictoreelbot)"}
 BRAND      = "worldstats.visualised"
-BG         = "#000000"
+BG         = "#0a0a0a"
 FPS        = 30
 
 FALLBACK_TOPICS = [
-    "US vs China GDP 2000–2024",
-    "Global CO₂ by continent 2000–2023",
-    "EV sales by country 2018–2024",
-    "Netflix vs YouTube vs TikTok subscribers 2018–2024",
-    "iPhone vs Android market share 2015–2024",
-    "Global renewable vs fossil energy 2010–2024",
-    "Top social media platforms by users 2015–2024",
-    "India vs USA vs China population 2000–2024",
+    "Instagram vs TikTok vs YouTube monthly active users 2018–2026",
+    "Top gaming platforms by revenue 2015–2026",
+    "Richest 20-something billionaires worldwide 2015–2026",
+    "Streaming wars: Netflix vs Disney+ vs Prime 2019–2026",
+    "Bitcoin vs Gold vs S&P 500 returns 2015–2026",
+    "Most popular coding languages by developer share 2016–2026",
+    "Top 8 universities by global ranking 2015–2026",
+    "EV vs Petrol car sales by country 2018–2026",
+    "AI startup funding by country 2019–2026",
+    "Most downloaded apps by Gen Z worldwide 2020–2026",
 ]
 
 _COL_SUFFIXES = {
@@ -337,7 +345,7 @@ def parse_uploaded_file(file) -> tuple[pd.DataFrame, str]:
 
 def parse_pasted_data(raw_text: str) -> tuple[pd.DataFrame, str]:
     resp = client.chat.completions.create(
-        model="gpt-5.1",
+        model="gpt-4.1",
         messages=[
             {"role": "system", "content": "Return ONLY clean CSV. No markdown."},
             {"role": "user", "content": (
@@ -354,7 +362,7 @@ def parse_pasted_data(raw_text: str) -> tuple[pd.DataFrame, str]:
     df      = pd.read_csv(io.StringIO(cleaned))
     df      = _clean_df(df)
     t = client.chat.completions.create(
-        model="gpt-5.1",
+        model="gpt-4.1",
         messages=[{"role": "user", "content":
                    f"Short chart title (≤7 words) for columns {list(df.columns)}. Return only title."}],
         max_completion_tokens=30,
@@ -401,7 +409,7 @@ def detect_units(topic: str, df: pd.DataFrame) -> dict:
               for c in cols[:4]}
     try:
         resp = client.chat.completions.create(
-            model="gpt-5.1",
+            model="gpt-4.1",
             messages=[{"role": "user", "content": (
                 f'Data topic: "{topic}"\n'
                 f'Column names: {cols}\n'
@@ -449,7 +457,7 @@ def generate_caption(topic: str, chart_title: str,
         lines.append(f"  {col}: {fmt(s,units)} → {fmt(e,units)} ({pct:+.1f}%)")
     try:
         resp = client.chat.completions.create(
-            model="gpt-5.1",
+            model="gpt-4.1",
             messages=[{"role": "user", "content": (
                 f"You are a data scientist making an Instagram Reel about '{topic}'.\n"
                 f"Chart: '{chart_title}'\nData:\n" + "\n".join(lines) + "\n\n"
@@ -523,53 +531,53 @@ def _trend_arrow(cur: float, first: float) -> str:
 
 # ── Shared figure scaffold ─────────────────────────────────────────────────────
 _AX_B = 0.17; _AX_T = 0.83
-_AX_L = 0.13; _AX_R = 0.70
+_AX_L = 0.12; _AX_R = 0.70
 FIG_W, FIG_H, DPI = 6.75, 12.0, 160
 
-def _make_figure(chart_title: str, subtitle: str, cta_text: str = "v Read caption for more") -> tuple:
+def _make_figure(chart_title: str, subtitle: str, cta_text: str = "Read caption below") -> tuple:
     plt.rcParams.update({"font.family": "DejaVu Sans"})
     fig = plt.figure(figsize=(FIG_W, FIG_H), facecolor=BG, dpi=DPI)
 
-    # Brand — very top, tiny, dim
-    fig.text(0.50, 0.977, BRAND, ha="center", va="top",
-             fontsize=8, color="#3A3A3A", fontstyle="italic")
+    # Brand watermark — very dim, top-right
+    fig.text(0.88, 0.972, f"/{BRAND}", ha="right", va="top",
+             fontsize=7, color="#222222", fontstyle="italic")
 
-    # Title — large bold
-    fig.text(_AX_L, 0.962, chart_title, ha="left", va="top",
-             fontsize=18, fontweight="bold", color="#FFFFFF", wrap=True)
+    # Title — bold white, left-aligned
+    fig.text(_AX_L, 0.968, chart_title, ha="left", va="top",
+             fontsize=20, fontweight="bold", color="#FFFFFF", wrap=True)
 
-    # Subtitle (unit description)
-    title_bottom = 0.920
+    # Subtitle (unit description) — smaller, muted
+    title_bottom = 0.925
     if subtitle:
         fig.text(_AX_L, title_bottom, subtitle, ha="left", va="top",
-                 fontsize=10, color="#888888")
-        title_bottom = 0.900
+                 fontsize=9.5, color="#666666")
+        title_bottom = 0.905
 
-    # CTA hook — below subtitle, prominent, acts as a hook line
-    fig.text(_AX_L, title_bottom - 0.004, cta_text, ha="left", va="top",
-             fontsize=9, color="#FF6B35", fontstyle="italic")
+    # CTA hook line
+    fig.text(_AX_L, title_bottom - 0.002, cta_text, ha="left", va="top",
+             fontsize=8.5, color="#FF6B35", fontstyle="italic")
 
     # Chart axes
     ax = fig.add_axes([_AX_L, _AX_B, _AX_R - _AX_L, _AX_T - _AX_B])
     ax.set_facecolor(BG)
 
-    # Spines: only left + bottom
+    # Spines: only left + bottom, very subtle
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
-    ax.spines["left"].set_color("#333333")
-    ax.spines["left"].set_linewidth(0.8)
-    ax.spines["bottom"].set_color("#333333")
-    ax.spines["bottom"].set_linewidth(0.8)
+    ax.spines["left"].set_color("#282828")
+    ax.spines["left"].set_linewidth(0.6)
+    ax.spines["bottom"].set_color("#282828")
+    ax.spines["bottom"].set_linewidth(0.6)
 
     # Subtle horizontal gridlines
-    ax.yaxis.set_minor_locator(mticker.AutoMinorLocator())
-    ax.grid(axis="y", color="#1A1A1A", linewidth=0.5, linestyle="--", alpha=0.8)
+    ax.grid(axis="y", color="#161616", linewidth=0.6, linestyle="-", alpha=1.0)
     ax.set_axisbelow(True)
 
-    # Period counter — HUGE, centred below chart
-    period_txt = fig.text(0.50, 0.090, "",
+    # Period counter — HUGE, centered at bottom, highly visible
+    period_txt = fig.text(0.50, 0.082, "",
                           ha="center", va="center",
-                          fontsize=36, fontweight="bold", color="#FFFFFF")
+                          fontsize=52, fontweight="bold", color="#FFFFFF",
+                          alpha=0.92)
 
     return fig, ax, period_txt
 
@@ -660,6 +668,8 @@ def create_line_race_video(
     ax.set_ylim(ylim_lo, ylim_hi)
 
     main_lines  = []
+    glow_outer  = []   # wide glow band
+    glow_inner  = []   # tight glow band
     halo_outer  = []
     halo_inner  = []
     tip_dots    = []
@@ -668,18 +678,24 @@ def create_line_race_video(
 
     for i, col in enumerate(cols):
         c = line_colors[i]
-        ml, = ax.plot([], [], color=c, linewidth=2.5,
+        # Neon glow layers (behind main line)
+        go, = ax.plot([], [], color=c, linewidth=10, alpha=0.04,
+                      solid_capstyle="round", zorder=2, clip_on=True)
+        gi, = ax.plot([], [], color=c, linewidth=4.5, alpha=0.14,
+                      solid_capstyle="round", zorder=3, clip_on=True)
+        ml, = ax.plot([], [], color=c, linewidth=2.2,
                       solid_capstyle="round", zorder=4)
 
-        ho, = ax.plot([], [], "o", color=c, markersize=16, alpha=0.10,
+        # Endpoint glow halos
+        ho, = ax.plot([], [], "o", color=c, markersize=20, alpha=0.07,
                       zorder=6, clip_on=False)
-        hi, = ax.plot([], [], "o", color=c, markersize=10, alpha=0.25,
+        hi, = ax.plot([], [], "o", color=c, markersize=11, alpha=0.20,
                       zorder=7, clip_on=False)
-        dot,= ax.plot([], [], "o", color=c, markersize=6,
+        dot,= ax.plot([], [], "o", color=c, markersize=7,
                       markerfacecolor=c, markeredgecolor="#FFFFFF",
-                      markeredgewidth=1.2, zorder=9, clip_on=False)
+                      markeredgewidth=1.5, zorder=9, clip_on=False)
 
-        # Icon CENTERED on the dot tip (box_alignment 0.5,0.5)
+        # Icon CENTERED on the dot tip
         iim = OffsetImage(icon_arrays[i], zoom=ICON_ZOOM, interpolation="lanczos")
         iab = AnnotationBbox(
             iim, (0, 0), xycoords="data",
@@ -689,11 +705,23 @@ def create_line_race_video(
         iab.set_visible(False)
         ax.add_artist(iab)
 
+        # Badge label — white text in colored box (matches reference screenshots)
+        r_int = int(c[1:3], 16); g_int = int(c[3:5], 16); b_int = int(c[5:7], 16)
+        face_rgba = (r_int/255, g_int/255, b_int/255, 0.18)
         lbl = ax.text(0, 0, "",
-                      color=c, fontsize=LBL_FONT, fontweight="bold",
+                      color="#FFFFFF", fontsize=LBL_FONT, fontweight="bold",
                       va="center", ha="left", zorder=12, clip_on=False,
-                      multialignment="left", linespacing=1.25)
+                      multialignment="left", linespacing=1.3,
+                      bbox=dict(
+                          boxstyle="round,pad=0.30",
+                          facecolor=face_rgba,
+                          edgecolor=c,
+                          linewidth=1.4,
+                          alpha=0.95,
+                      ))
 
+        glow_outer.append(go)
+        glow_inner.append(gi)
         main_lines.append(ml)
         halo_outer.append(ho)
         halo_inner.append(hi)
@@ -745,6 +773,9 @@ def create_line_race_video(
 
         for i, col in enumerate(cols):
             y_arr = y_interp[col][:f+1]
+            # All three line layers get same data
+            glow_outer[i].set_data(x_now_arr, y_arr)
+            glow_inner[i].set_data(x_now_arr, y_arr)
             main_lines[i].set_data(x_now_arr, y_arr)
 
             if len(x_now_arr) > 0:
@@ -758,11 +789,9 @@ def create_line_race_video(
                 halo_inner[i].set_data([xend], [yend])
                 tip_dots[i].set_data([xend], [yend])
 
-                # Icon centered on the dot tip — no lag behind
                 icon_boxes[i].xy = (xend, yend)
                 icon_boxes[i].set_visible(True)
 
-                # Label offset: right of icon edge in display pixels → data units
                 try:
                     tx_tip, ty_tip = _data_to_disp(xend, yend)
                     lx_nud, _ = _disp_to_data(tx_tip + LBL_GAP_PX, ty_tip)
@@ -772,14 +801,14 @@ def create_line_race_video(
                 cur_val = float(Y_MAT[f, i])
                 arrow   = _trend_arrow(cur_val, first_vals[i])
                 val_str = fmt(cur_val, units)
-                if n_lines <= 4:
-                    lbl_txt = f"{col}\n{arrow} {val_str}"
-                else:
-                    name_s  = col[:10] if len(col) > 10 else col
-                    lbl_txt = f"{name_s}: {arrow} {val_str}"
+                # Badge label: name on top, arrow+value below (always 2 rows for readability)
+                name_s  = col if len(col) <= 11 else col[:11]
+                lbl_txt = f"{name_s}\n{arrow} {val_str}"
                 val_labels[i].set_position((lx_nud, ny))
                 val_labels[i].set_text(lbl_txt)
             else:
+                glow_outer[i].set_data([], [])
+                glow_inner[i].set_data([], [])
                 halo_outer[i].set_data([], [])
                 halo_inner[i].set_data([], [])
                 tip_dots[i].set_data([], [])
@@ -855,19 +884,29 @@ def create_bar_race_video(
     ax.set_yticks([])
     ax.xaxis.set_visible(False)
 
-    LABEL_STRIP = x_max * 0.28
-    ax.set_xlim(-LABEL_STRIP, x_max * 1.12)
+    LABEL_STRIP = x_max * 0.30
+    ax.set_xlim(-LABEL_STRIP, x_max * 1.18)
     ax.set_ylim(-0.65, n_bars - 0.35)
     ax.invert_yaxis()
-    ax.axvline(x=0, color="#2A2A2A", linewidth=0.8, zorder=1)
+    ax.axvline(x=0, color="#1E1E1E", linewidth=0.8, zorder=1)
 
     init_vals   = {col: float(Y_MAT[0, i]) for i, col in enumerate(cols)}
     sorted_init = sorted(cols, key=lambda c: -init_vals[c])
     bar_ypos    = {col: float(r) for r, col in enumerate(sorted_init)}
 
+    # Glow bars (alpha layer behind main bar)
+    glow_patches: list[mpatches.Rectangle] = []
     bar_patches: list[mpatches.Rectangle] = []
     for i, col in enumerate(cols):
-        y0   = bar_ypos[col]
+        y0 = bar_ypos[col]
+        # Glow layer
+        glow = mpatches.Rectangle(
+            (0, y0 - BAR_H * 0.85), 0.001, BAR_H * 1.7,
+            linewidth=0, facecolor=bar_colors[i], alpha=0.12, zorder=2, antialiased=False,
+        )
+        ax.add_patch(glow)
+        glow_patches.append(glow)
+        # Main bar
         rect = mpatches.Rectangle(
             (0, y0 - BAR_H / 2), 0.001, BAR_H,
             linewidth=0, facecolor=bar_colors[i], zorder=4, antialiased=False,
@@ -877,10 +916,11 @@ def create_bar_race_video(
 
     name_labels: list = []
     for i, col in enumerate(cols):
-        y0  = bar_ypos[col]
-        lbl = ax.text(
-            -LABEL_STRIP * 0.12, y0, col,
-            color=bar_colors[i], fontsize=8.5, fontweight="bold",
+        y0   = bar_ypos[col]
+        name = col if len(col) <= 12 else col[:12]
+        lbl  = ax.text(
+            -LABEL_STRIP * 0.08, y0, name,
+            color=bar_colors[i], fontsize=9.5, fontweight="bold",
             va="center", ha="right", zorder=12, clip_on=False,
         )
         name_labels.append(lbl)
@@ -888,10 +928,18 @@ def create_bar_race_video(
     val_labels: list = []
     for i, col in enumerate(cols):
         y0  = bar_ypos[col]
+        r_int = int(bar_colors[i][1:3], 16); g_int = int(bar_colors[i][3:5], 16); b_int = int(bar_colors[i][5:7], 16)
+        face_rgba = (r_int/255, g_int/255, b_int/255, 0.20)
         lbl = ax.text(
             0.001, y0, "",
-            color="#FFFFFF", fontsize=8.5, fontweight="bold",
+            color="#FFFFFF", fontsize=9, fontweight="bold",
             va="center", ha="left", zorder=12, clip_on=False,
+            bbox=dict(
+                boxstyle="round,pad=0.25",
+                facecolor=face_rgba,
+                edgecolor=bar_colors[i],
+                linewidth=1.2,
+            ),
         )
         val_labels.append(lbl)
 
@@ -911,12 +959,14 @@ def create_bar_race_video(
             v  = cur_vals[col]
             vw = max(v, 0.001)
 
+            glow_patches[i].set_y(y - BAR_H * 0.85)
+            glow_patches[i].set_width(vw)
             bar_patches[i].set_y(y - BAR_H / 2)
             bar_patches[i].set_width(vw)
 
             name_labels[i].set_y(y)
             val_labels[i].set_y(y)
-            val_labels[i].set_x(v + x_max * 0.014)
+            val_labels[i].set_x(vw + x_max * 0.016)
 
             arrow   = _trend_arrow(v, first_vals[col])
             val_labels[i].set_text(f"{arrow} {fmt(v, units)}")
@@ -952,7 +1002,7 @@ def create_pie_race_video(
     raw_path: str,
     colors: list[str] | None = None,
 ) -> str:
-    import matplotlib.patches as mpatch
+    mpatch = mpatches
 
     n_periods = len(df)
     n_slices  = min(len(df.columns), 8)
@@ -993,50 +1043,89 @@ def create_pie_race_video(
     ax_pie.set_xlim(-1.45, 1.45); ax_pie.set_ylim(-1.45, 1.45)
     ax_pie.set_aspect("equal"); ax_pie.axis("off")
 
-    DONUT = n_slices > 4   # donut for many slices, full pie for few
+    INNER_R = 0.52   # donut hole radius — always donut style
+    OUTER_R = 0.82
+    CENTER_TXT = fig.text(0.50, 0.50, "", ha="center", va="center",
+                          fontsize=28, fontweight="bold", color="#FFFFFF",
+                          alpha=0.0)  # will be positioned in update
+    center_lbl = fig.text(0.50, 0.46, "", ha="center", va="center",
+                          fontsize=9, color="#888888")
 
     def update_pie(frame: int):
         f     = min(frame, total_frames - 1)
         p_idx = int(np.clip(round(x_dense[f]), 0, n_periods - 1))
         ax_pie.clear()
         ax_pie.set_facecolor(BG)
-        ax_pie.set_xlim(-1.45, 1.45); ax_pie.set_ylim(-1.45, 1.45)
+        ax_pie.set_xlim(-1.60, 1.60); ax_pie.set_ylim(-1.60, 1.60)
         ax_pie.set_aspect("equal"); ax_pie.axis("off")
 
         cur_vals = [max(1e-10, float(Y_MAT[f, i])) for i in range(n_slices)]
         total    = sum(cur_vals)
         start    = 90.0
-        width    = 0.45 if DONUT else 0.82
 
         for i in range(n_slices):
             pct   = cur_vals[i] / total
             sweep = pct * 360.0
+            theta1, theta2 = start - sweep, start
+
+            # Glow ring behind main slice
+            glow_w = mpatch.Wedge(
+                (0, 0), OUTER_R + 0.06, theta1, theta2,
+                width=OUTER_R - INNER_R + 0.10,
+                facecolor=pie_colors[i], alpha=0.12,
+                edgecolor="none", zorder=3,
+            )
+            ax_pie.add_patch(glow_w)
+
+            # Main slice
             w = mpatch.Wedge(
-                (0, 0), 0.82, start - sweep, start,
-                width=width, facecolor=pie_colors[i],
-                edgecolor=BG, linewidth=3, zorder=5,
+                (0, 0), OUTER_R, theta1, theta2,
+                width=OUTER_R - INNER_R,
+                facecolor=pie_colors[i],
+                edgecolor=BG, linewidth=2.5, zorder=5,
             )
             ax_pie.add_patch(w)
-            if pct > 0.03:
-                mid_ang = np.radians(start - sweep / 2)
-                r_lbl   = 0.88 if DONUT else 0.55
-                lx = np.cos(mid_ang) * r_lbl
-                ly = np.sin(mid_ang) * r_lbl
+
+            mid_ang = np.radians(start - sweep / 2)
+            mid_r   = (INNER_R + OUTER_R) / 2
+
+            if pct >= 0.10:
+                # Label inside the slice wedge
+                lx = np.cos(mid_ang) * mid_r
+                ly = np.sin(mid_ang) * mid_r
                 pct_str = f"{pct * 100:.1f}%"
-                ax_pie.text(lx, ly, f"{cols[i][:9]}\n{pct_str}",
+                ax_pie.text(lx, ly, f"{cols[i][:8]}\n{pct_str}",
                             ha="center", va="center", color="#FFFFFF",
-                            fontsize=6.5 if n_slices > 4 else 8,
+                            fontsize=7.5 if n_slices > 4 else 9,
                             fontweight="bold", clip_on=False, zorder=10)
+            else:
+                # Leader line + external label for small slices
+                tip_r  = OUTER_R + 0.05
+                end_r  = OUTER_R + 0.30
+                sign_x = 1.05 if np.cos(mid_ang) >= 0 else -1.05
+                tx = np.cos(mid_ang) * tip_r
+                ty = np.sin(mid_ang) * tip_r
+                ex = np.cos(mid_ang) * end_r
+                ey = np.sin(mid_ang) * end_r
+                ax_pie.plot([tx, ex, sign_x * abs(ex)], [ty, ey, ey],
+                            color=pie_colors[i], linewidth=0.9, alpha=0.8, zorder=8)
+                ha = "left" if sign_x > 0 else "right"
+                ax_pie.text(sign_x * (abs(ex) + 0.03), ey,
+                            f"{cols[i][:9]} {pct * 100:.1f}%",
+                            ha=ha, va="center", color=pie_colors[i],
+                            fontsize=6.5, fontweight="bold", clip_on=False, zorder=9)
             start -= sweep
 
-        # Legend strip
-        for i, col in enumerate(cols):
-            fig.text(
-                0.13 + (i % 4) * 0.21, 0.155 - (i // 4) * 0.022,
-                f"■ {col[:12]}", fontsize=7, color=pie_colors[i],
-                ha="left", va="top",
-            )
-        period_txt.set_text(_format_period_label(idx_labels[p_idx]))
+        # Center void: show year label
+        ax_pie.add_patch(plt.Circle((0, 0), INNER_R - 0.04, color=BG, zorder=6))
+        period_label = _format_period_label(idx_labels[p_idx])
+        ax_pie.text(0, 0.08, period_label, ha="center", va="center",
+                    color="#FFFFFF", fontsize=22, fontweight="bold",
+                    clip_on=False, zorder=11)
+        ax_pie.text(0, -0.14, "market share", ha="center", va="center",
+                    color="#666666", fontsize=7.5,
+                    clip_on=False, zorder=11)
+        period_txt.set_alpha(0.0)  # hide the big bottom counter for pie
 
     try:
         ani = mpl_animation.FuncAnimation(
@@ -1111,29 +1200,40 @@ def create_radar_race_video(
     ax_r.set_xlim(-1.5, 1.5); ax_r.set_ylim(-1.5, 1.5)
     ax_r.set_aspect("equal"); ax_r.axis("off")
 
-    # Grid rings (static)
-    ring_th = np.linspace(0, 2 * np.pi, 120)
-    for r_frac in [0.25, 0.50, 0.75, 1.0]:
+    # HUD-style concentric circle grid (static)
+    ring_th = np.linspace(0, 2 * np.pi, 200)
+    ring_fracs = [0.25, 0.50, 0.75, 1.0]
+    for r_frac in ring_fracs:
+        lw = 0.8 if r_frac == 1.0 else 0.4
         ax_r.plot(np.cos(ring_th) * r_frac, np.sin(ring_th) * r_frac,
-                  color="#1E1E1E", linewidth=0.6, zorder=1)
+                  color="#1C1C1C", linewidth=lw, zorder=1)
     for ang in angles:
         ax_r.plot([0, np.cos(ang)], [0, np.sin(ang)],
-                  color="#1E1E1E", linewidth=0.6, zorder=1)
+                  color="#1A1A1A", linewidth=0.5, zorder=1)
 
-    # Spoke labels (static)
+    # Spoke labels (static, colored per spoke)
     for i, (col, ang) in enumerate(zip(cols, angles)):
-        lx = np.cos(ang) * 1.22
-        ly = np.sin(ang) * 1.22
+        lx = np.cos(ang) * 1.28
+        ly = np.sin(ang) * 1.28
         ax_r.text(lx, ly, col[:10], ha="center", va="center",
-                  color=spk_colors[i], fontsize=8, fontweight="bold", clip_on=False)
+                  color=spk_colors[i], fontsize=8.5, fontweight="bold", clip_on=False)
 
-    poly_line, = ax_r.plot([], [], color="#FFFFFF", linewidth=2.0, zorder=5)
-    poly_fill  = ax_r.fill([], [], color="#FFFFFF", alpha=0.15, zorder=4)[0]
-    dot_scats  = [ax_r.plot([], [], "o", color=spk_colors[i], markersize=7,
-                            zorder=7, clip_on=False)[0] for i in range(n_spokes)]
-    val_txts   = [ax_r.text(0, 0, "", color=spk_colors[i], fontsize=6.5,
+    # Polygon fill + neon outer stroke
+    poly_line_glow, = ax_r.plot([], [], color="#FFFFFF", linewidth=6, alpha=0.08, zorder=4)
+    poly_line, = ax_r.plot([], [], color="#FFFFFF", linewidth=2.0, alpha=0.9, zorder=5)
+    poly_fill  = ax_r.fill([], [], color="#AAAAAA", alpha=0.0, zorder=3)[0]  # placeholder
+    dot_scats  = [ax_r.plot([], [], "o", color=spk_colors[i], markersize=8,
+                            markeredgecolor="#FFFFFF", markeredgewidth=1.0,
+                            zorder=8, clip_on=False)[0] for i in range(n_spokes)]
+    val_txts   = [ax_r.text(0, 0, "", color="#FFFFFF", fontsize=7,
                              fontweight="bold", ha="center", va="center",
-                             clip_on=False, zorder=8) for i in range(n_spokes)]
+                             clip_on=False, zorder=9,
+                             bbox=dict(boxstyle="round,pad=0.20",
+                                       facecolor=(int(spk_colors[i][1:3],16)/255,
+                                                  int(spk_colors[i][3:5],16)/255,
+                                                  int(spk_colors[i][5:7],16)/255, 0.25),
+                                       edgecolor=spk_colors[i], linewidth=0.9))
+                   for i in range(n_spokes)]
 
     def update_radar(frame: int):
         f     = min(frame, total_frames - 1)
@@ -1144,14 +1244,21 @@ def create_radar_race_video(
 
         px = nv_closed * np.cos(angles_closed)
         py = nv_closed * np.sin(angles_closed)
+        poly_line_glow.set_data(px, py)
         poly_line.set_data(px, py)
-        poly_fill.set_xy(np.column_stack([px, py]))
+        pts = np.column_stack([px, py])
+        poly_fill.set_xy(pts)
+        # Gradient-ish: use alpha based on polygon area
+        poly_fill.set_facecolor((0.6, 0.6, 0.8, 0.12))
+        poly_fill.set_edgecolor("none")
 
         for i in range(n_spokes):
             r = norm_vals[i]
-            dot_scats[i].set_data([r * np.cos(angles[i])], [r * np.sin(angles[i])])
-            lx = (r + 0.16) * np.cos(angles[i])
-            ly = (r + 0.16) * np.sin(angles[i])
+            dx = r * np.cos(angles[i]); dy = r * np.sin(angles[i])
+            dot_scats[i].set_data([dx], [dy])
+            off = 0.18
+            lx = (r + off) * np.cos(angles[i])
+            ly = (r + off) * np.sin(angles[i])
             val_txts[i].set_position((lx, ly))
             val_txts[i].set_text(fmt(cur_vals[i], units))
         period_txt.set_text(_format_period_label(idx_labels[p_idx]))
@@ -1323,15 +1430,16 @@ def render_preview_frame(
                                  cur_ylim[0] + ylim_span * 0.02,
                                  cur_ylim[1] - ylim_span * 0.02))
 
-            ax.plot(x, y, color=c, linewidth=2.5, solid_capstyle="round", zorder=4)
+            # Neon glow line layers
+            ax.plot(x, y, color=c, linewidth=10, alpha=0.04, solid_capstyle="round", zorder=2)
+            ax.plot(x, y, color=c, linewidth=4.5, alpha=0.14, solid_capstyle="round", zorder=3)
+            ax.plot(x, y, color=c, linewidth=2.2, solid_capstyle="round", zorder=4)
 
-            # Glow layers
-            ax.plot(xend, yend, "o", color=c, markersize=16, alpha=0.10,
-                    clip_on=False, zorder=6)
-            ax.plot(xend, yend, "o", color=c, markersize=10, alpha=0.25,
-                    clip_on=False, zorder=7)
-            ax.plot(xend, yend, "o", color=c, markersize=6,
-                    markeredgecolor="#FFFFFF", markeredgewidth=1.2,
+            # Endpoint halos + dot
+            ax.plot(xend, yend, "o", color=c, markersize=20, alpha=0.07, clip_on=False, zorder=6)
+            ax.plot(xend, yend, "o", color=c, markersize=11, alpha=0.20, clip_on=False, zorder=7)
+            ax.plot(xend, yend, "o", color=c, markersize=7,
+                    markeredgecolor="#FFFFFF", markeredgewidth=1.5,
                     clip_on=False, zorder=9)
 
             # Flag/icon centered on dot tip
@@ -1343,15 +1451,24 @@ def render_preview_frame(
             )
             ax.add_artist(iab)
 
-            # Label tightly to the right of the icon
+            # Badge label — white text in colored box
             arrow   = _trend_arrow(yend, first_vals[i])
             val_s   = fmt(yend, units)
-            lbl_txt = f"{col}\n{arrow} {val_s}" if n_series <= 4 else f"{col[:10]}: {arrow} {val_s}"
-
+            name_s  = col if len(col) <= 11 else col[:11]
+            lbl_txt = f"{name_s}\n{arrow} {val_s}"
+            r_int = int(c[1:3], 16); g_int = int(c[3:5], 16); b_int = int(c[5:7], 16)
+            face_rgba = (r_int/255, g_int/255, b_int/255, 0.18)
             ax.text(xend + P_LBL_X_OFF, ny, lbl_txt,
-                    color=c, fontsize=P_LBL_FONT, fontweight="bold",
+                    color="#FFFFFF", fontsize=P_LBL_FONT, fontweight="bold",
                     va="center", ha="left", clip_on=False,
-                    multialignment="left", linespacing=1.25)
+                    multialignment="left", linespacing=1.3,
+                    bbox=dict(
+                        boxstyle="round,pad=0.30",
+                        facecolor=face_rgba,
+                        edgecolor=c,
+                        linewidth=1.4,
+                        alpha=0.95,
+                    ))
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", facecolor=BG, dpi=DPI, bbox_inches="tight")
@@ -1362,10 +1479,15 @@ def render_preview_frame(
 # ── Live trending topics ────────────────────────────────────────────────────────
 def _reddit_headlines(n: int = 12) -> list[str]:
     titles = []
-    for sub in ["dataisbeautiful", "worldnews", "science", "technology", "economics"]:
+    youth_subs = [
+        "dataisbeautiful", "technology", "personalfinance",
+        "cscareerquestions", "gaming", "learnprogramming",
+        "stocks", "startups", "futurology",
+    ]
+    for sub in youth_subs:
         try:
             r = requests.get(
-                f"https://www.reddit.com/r/{sub}/hot.json?limit=6",
+                f"https://www.reddit.com/r/{sub}/hot.json?limit=5",
                 headers=REDDIT_UA, timeout=6,
             )
             if r.status_code == 200:
@@ -1391,35 +1513,48 @@ def _gnews_headlines(n: int = 10) -> list[str]:
         pass
     return []
 
-@st.cache_data(ttl=1800, show_spinner=False)
-def get_trending_topics() -> list[str]:
+@st.cache_data(ttl=600, show_spinner=False)
+def get_trending_topics(_salt: int = 0) -> list[str]:
+    """_salt forces cache-busting on manual refresh."""
     raw: list[str] = []
     raw.extend(_reddit_headlines(12))
     raw.extend(_gnews_headlines(10))
     if not raw:
-        return FALLBACK_TOPICS
+        # Shuffle fallbacks so it feels fresh
+        import random
+        fb = list(FALLBACK_TOPICS)
+        random.shuffle(fb)
+        return fb[:8]
     try:
         resp = client.chat.completions.create(
-            model="gpt-5.1",
+            model="gpt-4.1",
             messages=[
                 {"role": "system", "content": (
-                    "Turn these headlines into 8 animated data chart prompts suitable "
-                    "for a line or bar chart race. Each prompt should cover a time range "
-                    "ending in 2024 or 2025. One prompt per line, no bullets, no numbering."
+                    f"You create animated data chart prompts aimed at 15–25 year olds "
+                    f"(Gen Z) — topics like tech, social media, gaming, crypto, careers, "
+                    f"streaming, AI, sports, money, startups. "
+                    "Turn these headlines into 8 chart race prompts. "
+                    "Each must cover a time range ending in 2025 or 2026. "
+                    "Prefer: comparisons between brands/countries/platforms. "
+                    "One prompt per line, no bullets, no numbering."
                 )},
                 {"role": "user", "content":
                     "Recent headlines:\n" + "\n".join(f"- {t}" for t in raw[:20]) +
-                    "\n\nGenerate 8 chart prompts."},
+                    "\n\nGenerate 8 fresh chart prompts that Gen Z would find interesting."},
             ],
-            max_completion_tokens=350,
+            max_completion_tokens=400,
         )
         lines = [l.strip() for l in
-                 resp.choices[0].message.content.strip().splitlines() if l.strip()]
+                 resp.choices[0].message.content.strip().splitlines()
+                 if l.strip() and not l.strip()[0].isdigit()]
         if len(lines) >= 4:
             return lines[:8]
     except Exception:
         pass
-    return FALLBACK_TOPICS
+    import random
+    fb = list(FALLBACK_TOPICS)
+    random.shuffle(fb)
+    return fb[:8]
 
 # ── Streamlit page config ──────────────────────────────────────────────────────
 st.set_page_config(page_title="Topic-to-Reel", page_icon="🎬", layout="wide")
@@ -1513,7 +1648,7 @@ with st.sidebar:
                 st.rerun()
 
         with st.spinner("Fetching live topics…"):
-            suggestions = get_trending_topics()
+            suggestions = get_trending_topics(_salt=int(time.time()) // 600)
 
         for idx, sug in enumerate(suggestions):
             if st.button(sug, key=f"sug_{idx}", use_container_width=True):
@@ -1637,12 +1772,14 @@ else:
 
         steps = 28; bar_duration = 20   # safe defaults regardless of chart type
         if is_line:
-            steps = st.slider("Frames per period (higher = slower)", 8, 60, 28, 4)
+            steps = st.slider("Frames per period (higher = slower)", 8, 60, 28, 4,
+                              key="main_steps_slider")
             n_p   = len(pdf)
             est   = (n_p - 1) * steps / FPS
             st.caption(f"⏱ ~{est:.0f}s · {n_p} periods · ease-in/out")
         else:
-            bar_duration = st.slider("Duration (seconds)", 5, 60, 20, 5)
+            bar_duration = st.slider("Duration (seconds)", 5, 60, 20, 5,
+                                     key="main_dur_slider")
             st.caption(f"⏱ {bar_duration}s · {len(pdf)} periods · ease-in/out")
 
         # ── Re-render preview when chart type changes ─────────────────────────
