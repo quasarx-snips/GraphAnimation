@@ -49,6 +49,24 @@ REDDIT_UA  = {"User-Agent": "TopicToReel/1.0 (by /u/topictoreelbot)"}
 BRAND      = "worldstats.visualised"
 BG         = "#0a0a0a"
 FPS        = 30
+HOLD_FRAMES = 3 * FPS   # 3-second static hold at end of every animation
+
+# ── Style Presets ─────────────────────────────────────────────────────────────
+STYLE_PRESETS: dict[str, dict] = {
+    "🌟 Cyberpunk": {
+        "bg":         "#0a0a0a",
+        "colors":     ["#00E5FF","#E040FB","#69FF47","#FF2D55","#FFD700","#FF6B35","#0091FF","#FF9500"],
+        "line_glow":  True,
+        "grid_color": "#161616",
+    },
+    "🎯 Clean": {
+        "bg":         "#111111",
+        "colors":     ["#4FC3F7","#81C784","#FFB74D","#E57373","#BA68C8","#26C6DA","#AED581","#FF8A65"],
+        "line_glow":  False,
+        "grid_color": "#222222",
+    },
+}
+LINE_GLOW = True   # overridden at runtime by style selection
 
 FALLBACK_TOPICS = [
     "Instagram vs TikTok vs YouTube monthly active users 2018–2026",
@@ -538,43 +556,45 @@ def _make_figure(chart_title: str, subtitle: str, cta_text: str = "Read caption 
     plt.rcParams.update({"font.family": "DejaVu Sans"})
     fig = plt.figure(figsize=(FIG_W, FIG_H), facecolor=BG, dpi=DPI)
 
-    # Brand watermark — very dim, top-right
-    fig.text(0.88, 0.972, f"/{BRAND}", ha="right", va="top",
-             fontsize=7, color="#222222", fontstyle="italic")
-
-    # Title — bold white, left-aligned
-    fig.text(_AX_L, 0.968, chart_title, ha="left", va="top",
+    # Title — bold white, left-aligned, at top
+    fig.text(_AX_L, 0.970, chart_title, ha="left", va="top",
              fontsize=20, fontweight="bold", color="#FFFFFF", wrap=True)
 
     # Subtitle (unit description) — smaller, muted
-    title_bottom = 0.925
+    title_bottom = 0.928
     if subtitle:
         fig.text(_AX_L, title_bottom, subtitle, ha="left", va="top",
                  fontsize=9.5, color="#666666")
-        title_bottom = 0.905
+        title_bottom = 0.908
 
     # CTA hook line
     fig.text(_AX_L, title_bottom - 0.002, cta_text, ha="left", va="top",
              fontsize=8.5, color="#FF6B35", fontstyle="italic")
 
+    # Brand watermark — BELOW the CTA line (spec: move under caption)
+    fig.text(_AX_L, title_bottom - 0.022, f"@{BRAND}", ha="left", va="top",
+             fontsize=7, color="#2E2E2E", fontstyle="italic")
+
     # Chart axes
     ax = fig.add_axes([_AX_L, _AX_B, _AX_R - _AX_L, _AX_T - _AX_B])
     ax.set_facecolor(BG)
 
-    # Spines: only left + bottom, very subtle
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-    ax.spines["left"].set_color("#282828")
-    ax.spines["left"].set_linewidth(0.6)
-    ax.spines["bottom"].set_color("#282828")
-    ax.spines["bottom"].set_linewidth(0.6)
+    # 1px border around the graph area (15% opacity)
+    for spine in ax.spines.values():
+        spine.set_visible(True)
+        spine.set_color("#FFFFFF")
+        spine.set_alpha(0.15)
+        spine.set_linewidth(1.0)
 
     # Subtle horizontal gridlines
-    ax.grid(axis="y", color="#161616", linewidth=0.6, linestyle="-", alpha=1.0)
+    grid_c = STYLE_PRESETS.get(
+        st.session_state.get("style_preset", "🌟 Cyberpunk"), {}
+    ).get("grid_color", "#161616")
+    ax.grid(axis="y", color=grid_c, linewidth=0.5, linestyle="-", alpha=1.0)
     ax.set_axisbelow(True)
 
     # Period counter — HUGE, centered at bottom, highly visible
-    period_txt = fig.text(0.50, 0.082, "",
+    period_txt = fig.text(0.50, 0.060, "",
                           ha="center", va="center",
                           fontsize=52, fontweight="bold", color="#FFFFFF",
                           alpha=0.92)

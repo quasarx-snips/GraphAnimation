@@ -1,0 +1,23 @@
+TECHNICAL SPECIFICATION: SYSTEM PATCH 4.1 (UI & ENGINE REFACTOR)
+Objective: Finalize graphical precision, implement multi-type previews, and build the batch-processing interface.
+I. RADAR (SPIDER) CHART CALIBRATION
+• Coordinate Mapping: Fix the vertex scaling. Values \bm{V_i} must map linearly to radius \bm{R_i} from the origin (\bm{0}) to the max radius (\bm{R_{max}}). Currently, all points snap to \bm{R_{max}}; this must be corrected to reflect actual data.
+• Concentric Web Grid: Render concentric polygon "web" lines at \bm{25\%}, \bm{50\%}, and \bm{75\%} intervals of \bm{R_{max}}.
+• Guide Typography: Add light-grey, small-font value markers on the vertical axis of the web grid for user reference.
+• Polygon Styling: Apply a Light Silver Tint (rgba(192, 192, 192, 0.15)) to the area bounded by the radar polygon.
+• Icon Removal: Remove all icons from the radar vertices; use text labels only.
+II. UI LAYOUT & SPATIAL HIERARCHY
+• Footer Realignment: * Move the @worldstat.visualised handle to the line directly below the "Read caption" call-to-action.
+• Translate the entire footer block (Heading, Subheading, Caption) downwards by \bm{50px} to accommodate larger titles.
+• Pie Chart Scaling: Increase the default radius \bm{R_{pie}} by \bm{30\%}. Minimize dead space to ensure the chart dominates the viewport.
+• Graph Boundaries: Render a \bm{1px} sharp border (opacity \bm{15\%}) around the rectangular container of the graph/bar area.
+III. MOTION & RENDERING LOGIC
+• Global Easing: Apply Ease-In-Out (Cubic) acceleration and deceleration to ALL chart types (Pie, Radar, Line, Bar).
+• Aesthetic Reset: Remove all "Side Glow/Bloom" from the Bar Chart module. All bars must have sharp, clean edges.
+• Final Frame Hold: Append a 3-second static freeze at the end of the video duration (\bm{t_{max}}) so users can analyze the final data state.
+• Text Collision (Line Graph): Fix the overlap logic. Implement a recursive check: if bbox_a intersects bbox_b, apply a vertical offset of \bm{\pm 12px} until zero intersection is achieved.
+IV. SYSTEM FEATURES & BATCH PROCESSING
+• Multi-Type Preview: Integrate the render_preview function for Radar and Pie charts. The UI must display a static frame of the final data state for all chart types before the user commits to rendering.
+• Dynamic Batch Interface: * Implement a dynamic UI list where users can "Add" or "Remove" input blocks.
+• Each block must contain unique fields for: CSV_URL, TITLE, and a CHART_TYPE selector (Bar, Line, Pie, Radar).
+• Error Reporting: Wrap the rendering engine in a global try-except block. On failure, trigger a modal displaying the Exception Type and the Traceback to the user.
